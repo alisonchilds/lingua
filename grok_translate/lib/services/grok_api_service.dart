@@ -15,9 +15,22 @@ import '../models/grok_api_models.dart';
 ///   - Establish / reconnect the WebSocket.
 ///   - Serialize outbound events and stream inbound events.
 ///   - No audio or state logic lives here – this is pure transport.
+///
+/// Connection routing:
+///   Web  → Cloudflare Worker proxy (keeps API key server-side, no auth header in browser)
+///   Native (iOS/Android) → Grok API directly (Authorization header on the WS handshake)
+///
+/// To set the worker URL: update [_workerUrl] below with your deployed worker's
+/// wss:// address, e.g. wss://grok-translate-proxy.YOUR-SUBDOMAIN.workers.dev
 class GrokApiService {
-  static const _wsUrl = 'wss://api.x.ai/v1/realtime';
-  static const _model = 'grok-2-1212'; // adjust when Grok voice model GA's
+  /// Direct Grok API endpoint – used by native apps (Authorization header supported).
+  static const _directUrl = 'wss://api.x.ai/v1/realtime';
+
+  /// Cloudflare Worker proxy URL – used on web (browser blocks custom WS headers).
+  /// Replace this with your deployed worker URL after deploying cloudflare-worker/worker.js
+  static const _workerUrl = 'wss://grok-translate-proxy.YOUR-SUBDOMAIN.workers.dev';
+
+  static const _model = 'grok-2-1212';
 
   final Logger _log = Logger(printer: PrettyPrinter(methodCount: 0));
 
@@ -257,16 +270,24 @@ class GrokApiService {
 
   /// Build the correct WebSocketChannel depending on platform.
   ///
-  /// Web: API key goes in the URL (browsers forbid custom WS headers).
-  /// Native: API key goes in the Authorization header.
+  /// Web  → Cloudflare Worker proxy. No API key in the browser; the worker
+  ///         injects the Authorization header server-side using its secret.
+  ///
+  /// Native (iOS/Android) → Direct connection to Grok with Authorization header.
+  ///         dart:io supports custom headers on the WebSocket handshake.
   WebSocketChannel _buildChannel() {
     if (kIsWeb) {
-      // Key in query param – acceptable for dev/testing; use a proxy in prod.
-      final uri = Uri.parse('$_wsUrl?model=$_model&api_key=$_apiKey');
+      // Web: connect through the Cloudflare Worker proxy.
+      // The worker adds the Authorization header — no key needed client-side.
+      // Falls back to direct URL + query param if the worker URL is not configured.
+      final useProxy = !_workerUrl.contains('YOUR-SUBDOMAIN');
+      final uri = useProxy
+          ? Uri.parse(_workerUrl)
+          : Uri.parse('$_directUrl?model=$_model&api_key=$_apiKey');
       return WebSocketChannel.connect(uri, protocols: ['realtime']);
     } else {
-      // Native: web_socket_channel forwards extra headers via dart:io HttpClient.
-      final uri = Uri.parse('$_wsUrl?model=$_model');
+      // Native: direct connection with the Authorization header.
+      final uri = Uri.parse('$_directUrl?model=$_model');
       return IOWebSocketChannel.connect(
         uri,
         protocols: ['realtime'],

@@ -1,0 +1,7 @@
+name = "grok-translate-proxy"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The XAI_API_KEY secret is NOT stored here.
+# Set it with:  wrangler secret put XAI_API_KEY
