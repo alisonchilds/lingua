@@ -35,9 +35,10 @@
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
-// The Grok Realtime API endpoint. Update the model name here when xAI releases
-// newer voice models (e.g. grok-voice-think-fast-1.0 once it's GA).
-const GROK_API_URL = "wss://api.x.ai/v1/realtime?model=grok-2-1212";
+// Grok Realtime API endpoint.
+// IMPORTANT: Cloudflare Workers require https:// (not wss://) when calling
+// fetch() to establish an upstream WebSocket — the runtime upgrades it automatically.
+const GROK_API_URL = "https://api.x.ai/v1/realtime?model=grok-2-1212";
 
 /**
  * Origins allowed to connect to this proxy.
@@ -105,13 +106,17 @@ export default {
     // ── 7. Upgrade the upstream Grok connection (with the secret header) ───
     let grokSocket;
     try {
+      // Cloudflare Workers use https:// for upstream WebSocket fetches.
+      // The `Upgrade: websocket` header tells the runtime to upgrade the
+      // connection. HTTP/2 does not support Upgrade, so this only works
+      // because Workers' fetch() internally uses HTTP/1.1 for WS upgrades.
       const grokResp = await fetch(GROK_API_URL, {
         headers: {
-          Upgrade: "websocket",
-          Connection: "Upgrade",
-          Authorization: `Bearer ${env.XAI_API_KEY}`,
-          // Forward the Sec-WebSocket-Protocol header so Grok knows the
-          // subprotocol (some realtime APIs require "realtime").
+          "Upgrade": "websocket",
+          "Connection": "Upgrade",
+          "Authorization": `Bearer ${env.XAI_API_KEY}`,
+          "Sec-WebSocket-Version": "13",
+          // Forward subprotocol if the client sent one
           ...(request.headers.get("Sec-WebSocket-Protocol")
             ? { "Sec-WebSocket-Protocol": request.headers.get("Sec-WebSocket-Protocol") }
             : {}),
