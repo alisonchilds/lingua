@@ -76,11 +76,16 @@ export default {
     }
 
     // ── 3. Only accept WebSocket upgrades beyond this point ───────────────
+    // Cloudflare may deliver requests over HTTP/2 internally, which strips the
+    // Upgrade header. Check Sec-WebSocket-Key as a reliable WS indicator too.
     const upgradeHeader = request.headers.get("Upgrade");
-    if (!upgradeHeader || upgradeHeader.toLowerCase() !== "websocket") {
+    const wsKey = request.headers.get("Sec-WebSocket-Key");
+    const isWebSocket =
+      (upgradeHeader && upgradeHeader.toLowerCase() === "websocket") || !!wsKey;
+    if (!isWebSocket) {
       return jsonResponse(
         { error: "This endpoint only accepts WebSocket connections." },
-        426, // Upgrade Required
+        426,
         { "Upgrade": "websocket" }
       );
     }
@@ -125,11 +130,11 @@ export default {
 
       if (grokResp.status !== 101) {
         const body = await grokResp.text();
-        console.error(`[proxy] Grok API refused upgrade: ${grokResp.status} – ${body}`);
+        const msg = `Grok refused: ${grokResp.status} – ${body}`;
+        console.error(`[proxy] ${msg}`);
         serverSide.close(1011, "Upstream connection failed");
-        return new Response("Bad Gateway: upstream refused WebSocket upgrade", {
-          status: 502,
-        });
+        // Return the actual error body so the client can see what went wrong
+        return new Response(msg, { status: 502 });
       }
 
       grokSocket = grokResp.webSocket;
