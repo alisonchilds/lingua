@@ -38,7 +38,7 @@
 // Grok Realtime API endpoint.
 // IMPORTANT: Cloudflare Workers require https:// (not wss://) when calling
 // fetch() to establish an upstream WebSocket — the runtime upgrades it automatically.
-const GROK_API_URL = "https://api.x.ai/v1/realtime?model=grok-2-1212";
+const GROK_API_URL = "https://api.x.ai/v1/realtime?model=grok-voice-think-fast-1.0";
 
 /**
  * Origins allowed to connect to this proxy.

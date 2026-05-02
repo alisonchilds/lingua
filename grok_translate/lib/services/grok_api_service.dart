@@ -41,8 +41,8 @@ class GrokApiService {
   /// Direct Grok Realtime API endpoint – used by native (iOS/Android) builds.
   static const kDirectUrl = 'wss://api.x.ai/v1/realtime';
 
-  /// Grok model name sent in the session.update message.
-  static const _model = 'grok-2-1212';
+  /// Grok voice model name – passed as a query param on native direct connections.
+  static const _model = 'grok-voice-think-fast-1.0';
 
   final Logger _log = Logger(printer: PrettyPrinter(methodCount: 0));
 
@@ -177,13 +177,8 @@ class GrokApiService {
     _sendRaw({
       'type': 'session.update',
       'session': {
-        'model': _model,
-        'modalities': ['text', 'audio'],
         'instructions': instructions,
-        'voice': 'alloy',
-        'input_audio_format': 'pcm16',
-        'output_audio_format': 'pcm16',
-        'input_audio_transcription': {'model': 'whisper-1'},
+        'voice': 'eve', // xAI voice name (not OpenAI's 'alloy')
         'turn_detection': {
           'type': 'server_vad',
           'threshold': vadSettings.threshold,
@@ -232,6 +227,11 @@ class GrokApiService {
             : null,
         raw: json,
       );
+
+      // Log unknown events so we can discover any API naming differences
+      if (eventType == GrokServerEventType.unknown) {
+        _log.d('Unknown event type: $typeStr | raw: $raw');
+      }
 
       if (!_eventController.isClosed) {
         _eventController.add(event);

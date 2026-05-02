@@ -85,6 +85,7 @@ GrokServerEventType grokEventTypeFromString(String type) {
   return const {
     'session.created': GrokServerEventType.sessionCreated,
     'session.updated': GrokServerEventType.sessionUpdated,
+    // VAD events
     'input_audio_buffer.speech_started':
         GrokServerEventType.inputAudioBufferSpeechStarted,
     'input_audio_buffer.speech_stopped':
@@ -92,8 +93,10 @@ GrokServerEventType grokEventTypeFromString(String type) {
     'input_audio_buffer.committed':
         GrokServerEventType.inputAudioBufferCommitted,
     'response.created': GrokServerEventType.responseCreated,
-    'response.audio.delta': GrokServerEventType.responseAudioDelta,
-    'response.audio.done': GrokServerEventType.responseAudioDone,
+    // xAI uses response.output_audio.delta / .done (not response.audio.*)
+    'response.output_audio.delta': GrokServerEventType.responseAudioDelta,
+    'response.output_audio.done': GrokServerEventType.responseAudioDone,
+    // Transcript events
     'response.audio_transcript.delta':
         GrokServerEventType.responseAudioTranscriptDelta,
     'response.audio_transcript.done':
