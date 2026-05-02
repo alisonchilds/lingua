@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:logger/logger.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/conversation_models.dart';
@@ -114,15 +116,15 @@ class GrokApiService {
 
     try {
       _log.i('Connecting to Grok Realtime API…');
-      _channel = WebSocketChannel.connect(
-        Uri.parse('$_wsUrl?model=$_model'),
-        protocols: ['realtime'],
-      );
 
-      // Add auth header – web_socket_channel supports headers on native only.
-      // On web, the API key is passed as a query param (less secure, but
-      // necessary since browsers block custom WS headers).
-      // TODO: route through a backend proxy for production to hide the key.
+      // Browsers cannot send custom headers on WebSocket connections — the
+      // Web platform spec forbids it. On web we embed the key in the URL as
+      // a query parameter. On native (iOS/Android) we use the Authorization
+      // header, which web_socket_channel passes through the IO socket.
+      // → For production, route through a backend proxy to avoid exposing
+      //   the key in the browser URL bar / server logs.
+      _channel = _buildChannel();
+
       _subscription = _channel!.stream.listen(
         _onMessage,
         onError: _onError,
@@ -251,6 +253,26 @@ class GrokApiService {
     _reconnectTimer = Timer(delay, () {
       _connect(languageConfig: languageConfig, vadSettings: vadSettings);
     });
+  }
+
+  /// Build the correct WebSocketChannel depending on platform.
+  ///
+  /// Web: API key goes in the URL (browsers forbid custom WS headers).
+  /// Native: API key goes in the Authorization header.
+  WebSocketChannel _buildChannel() {
+    if (kIsWeb) {
+      // Key in query param – acceptable for dev/testing; use a proxy in prod.
+      final uri = Uri.parse('$_wsUrl?model=$_model&api_key=$_apiKey');
+      return WebSocketChannel.connect(uri, protocols: ['realtime']);
+    } else {
+      // Native: web_socket_channel forwards extra headers via dart:io HttpClient.
+      final uri = Uri.parse('$_wsUrl?model=$_model');
+      return IOWebSocketChannel.connect(
+        uri,
+        protocols: ['realtime'],
+        headers: {'Authorization': 'Bearer $_apiKey'},
+      );
+    }
   }
 
   void _sendRaw(Map<String, dynamic> payload) {
