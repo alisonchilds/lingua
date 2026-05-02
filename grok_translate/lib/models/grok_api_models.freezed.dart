@@ -1351,6 +1351,8 @@ mixin _$GrokServerEvent {
   String? get audioDelta => throw _privateConstructorUsedError; // base64 PCM16
   String? get transcriptDelta => throw _privateConstructorUsedError;
   String? get transcriptText => throw _privateConstructorUsedError;
+  String? get detectedLanguage =>
+      throw _privateConstructorUsedError; // ISO language code from transcription event
   String? get errorMessage => throw _privateConstructorUsedError;
   Map<String, dynamic>? get raw => throw _privateConstructorUsedError;
 
@@ -1373,6 +1375,7 @@ abstract class $GrokServerEventCopyWith<$Res> {
       String? audioDelta,
       String? transcriptDelta,
       String? transcriptText,
+      String? detectedLanguage,
       String? errorMessage,
       Map<String, dynamic>? raw});
 }
@@ -1397,6 +1400,7 @@ class _$GrokServerEventCopyWithImpl<$Res, $Val extends GrokServerEvent>
     Object? audioDelta = freezed,
     Object? transcriptDelta = freezed,
     Object? transcriptText = freezed,
+    Object? detectedLanguage = freezed,
     Object? errorMessage = freezed,
     Object? raw = freezed,
   }) {
@@ -1420,6 +1424,10 @@ class _$GrokServerEventCopyWithImpl<$Res, $Val extends GrokServerEvent>
       transcriptText: freezed == transcriptText
           ? _value.transcriptText
           : transcriptText // ignore: cast_nullable_to_non_nullable
+              as String?,
+      detectedLanguage: freezed == detectedLanguage
+          ? _value.detectedLanguage
+          : detectedLanguage // ignore: cast_nullable_to_non_nullable
               as String?,
       errorMessage: freezed == errorMessage
           ? _value.errorMessage
@@ -1447,6 +1455,7 @@ abstract class _$$GrokServerEventImplCopyWith<$Res>
       String? audioDelta,
       String? transcriptDelta,
       String? transcriptText,
+      String? detectedLanguage,
       String? errorMessage,
       Map<String, dynamic>? raw});
 }
@@ -1469,6 +1478,7 @@ class __$$GrokServerEventImplCopyWithImpl<$Res>
     Object? audioDelta = freezed,
     Object? transcriptDelta = freezed,
     Object? transcriptText = freezed,
+    Object? detectedLanguage = freezed,
     Object? errorMessage = freezed,
     Object? raw = freezed,
   }) {
@@ -1493,6 +1503,10 @@ class __$$GrokServerEventImplCopyWithImpl<$Res>
           ? _value.transcriptText
           : transcriptText // ignore: cast_nullable_to_non_nullable
               as String?,
+      detectedLanguage: freezed == detectedLanguage
+          ? _value.detectedLanguage
+          : detectedLanguage // ignore: cast_nullable_to_non_nullable
+              as String?,
       errorMessage: freezed == errorMessage
           ? _value.errorMessage
           : errorMessage // ignore: cast_nullable_to_non_nullable
@@ -1514,6 +1528,7 @@ class _$GrokServerEventImpl implements _GrokServerEvent {
       this.audioDelta,
       this.transcriptDelta,
       this.transcriptText,
+      this.detectedLanguage,
       this.errorMessage,
       final Map<String, dynamic>? raw})
       : _raw = raw;
@@ -1530,6 +1545,9 @@ class _$GrokServerEventImpl implements _GrokServerEvent {
   @override
   final String? transcriptText;
   @override
+  final String? detectedLanguage;
+// ISO language code from transcription event
+  @override
   final String? errorMessage;
   final Map<String, dynamic>? _raw;
   @override
@@ -1543,7 +1561,7 @@ class _$GrokServerEventImpl implements _GrokServerEvent {
 
   @override
   String toString() {
-    return 'GrokServerEvent(type: $type, eventId: $eventId, audioDelta: $audioDelta, transcriptDelta: $transcriptDelta, transcriptText: $transcriptText, errorMessage: $errorMessage, raw: $raw)';
+    return 'GrokServerEvent(type: $type, eventId: $eventId, audioDelta: $audioDelta, transcriptDelta: $transcriptDelta, transcriptText: $transcriptText, detectedLanguage: $detectedLanguage, errorMessage: $errorMessage, raw: $raw)';
   }
 
   @override
@@ -1559,6 +1577,8 @@ class _$GrokServerEventImpl implements _GrokServerEvent {
                 other.transcriptDelta == transcriptDelta) &&
             (identical(other.transcriptText, transcriptText) ||
                 other.transcriptText == transcriptText) &&
+            (identical(other.detectedLanguage, detectedLanguage) ||
+                other.detectedLanguage == detectedLanguage) &&
             (identical(other.errorMessage, errorMessage) ||
                 other.errorMessage == errorMessage) &&
             const DeepCollectionEquality().equals(other._raw, _raw));
@@ -1572,6 +1592,7 @@ class _$GrokServerEventImpl implements _GrokServerEvent {
       audioDelta,
       transcriptDelta,
       transcriptText,
+      detectedLanguage,
       errorMessage,
       const DeepCollectionEquality().hash(_raw));
 
@@ -1592,6 +1613,7 @@ abstract class _GrokServerEvent implements GrokServerEvent {
       final String? audioDelta,
       final String? transcriptDelta,
       final String? transcriptText,
+      final String? detectedLanguage,
       final String? errorMessage,
       final Map<String, dynamic>? raw}) = _$GrokServerEventImpl;
 
@@ -1605,6 +1627,8 @@ abstract class _GrokServerEvent implements GrokServerEvent {
   String? get transcriptDelta;
   @override
   String? get transcriptText;
+  @override
+  String? get detectedLanguage; // ISO language code from transcription event
   @override
   String? get errorMessage;
   @override

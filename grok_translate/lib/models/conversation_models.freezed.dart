@@ -573,7 +573,14 @@ mixin _$ConversationState {
   String get partialTranscript => throw _privateConstructorUsedError;
   String? get errorMessage => throw _privateConstructorUsedError;
   double get vadThreshold => throw _privateConstructorUsedError;
-  int get vadSilenceDurationMs => throw _privateConstructorUsedError;
+  int get vadSilenceDurationMs =>
+      throw _privateConstructorUsedError; // Detected languages — populated once the API identifies speech
+  String? get detectedLang1 =>
+      throw _privateConstructorUsedError; // e.g. "English"
+  String? get detectedLang2 =>
+      throw _privateConstructorUsedError; // e.g. "French"
+  String? get detectedLang1Flag => throw _privateConstructorUsedError;
+  String? get detectedLang2Flag => throw _privateConstructorUsedError;
 
   /// Create a copy of ConversationState
   /// with the given fields replaced by the non-null parameter values.
@@ -599,7 +606,11 @@ abstract class $ConversationStateCopyWith<$Res> {
       String partialTranscript,
       String? errorMessage,
       double vadThreshold,
-      int vadSilenceDurationMs});
+      int vadSilenceDurationMs,
+      String? detectedLang1,
+      String? detectedLang2,
+      String? detectedLang1Flag,
+      String? detectedLang2Flag});
 
   $LanguageConfigCopyWith<$Res>? get languageConfig;
 }
@@ -630,6 +641,10 @@ class _$ConversationStateCopyWithImpl<$Res, $Val extends ConversationState>
     Object? errorMessage = freezed,
     Object? vadThreshold = null,
     Object? vadSilenceDurationMs = null,
+    Object? detectedLang1 = freezed,
+    Object? detectedLang2 = freezed,
+    Object? detectedLang1Flag = freezed,
+    Object? detectedLang2Flag = freezed,
   }) {
     return _then(_value.copyWith(
       status: null == status
@@ -676,6 +691,22 @@ class _$ConversationStateCopyWithImpl<$Res, $Val extends ConversationState>
           ? _value.vadSilenceDurationMs
           : vadSilenceDurationMs // ignore: cast_nullable_to_non_nullable
               as int,
+      detectedLang1: freezed == detectedLang1
+          ? _value.detectedLang1
+          : detectedLang1 // ignore: cast_nullable_to_non_nullable
+              as String?,
+      detectedLang2: freezed == detectedLang2
+          ? _value.detectedLang2
+          : detectedLang2 // ignore: cast_nullable_to_non_nullable
+              as String?,
+      detectedLang1Flag: freezed == detectedLang1Flag
+          ? _value.detectedLang1Flag
+          : detectedLang1Flag // ignore: cast_nullable_to_non_nullable
+              as String?,
+      detectedLang2Flag: freezed == detectedLang2Flag
+          ? _value.detectedLang2Flag
+          : detectedLang2Flag // ignore: cast_nullable_to_non_nullable
+              as String?,
     ) as $Val);
   }
 
@@ -713,7 +744,11 @@ abstract class _$$ConversationStateImplCopyWith<$Res>
       String partialTranscript,
       String? errorMessage,
       double vadThreshold,
-      int vadSilenceDurationMs});
+      int vadSilenceDurationMs,
+      String? detectedLang1,
+      String? detectedLang2,
+      String? detectedLang1Flag,
+      String? detectedLang2Flag});
 
   @override
   $LanguageConfigCopyWith<$Res>? get languageConfig;
@@ -743,6 +778,10 @@ class __$$ConversationStateImplCopyWithImpl<$Res>
     Object? errorMessage = freezed,
     Object? vadThreshold = null,
     Object? vadSilenceDurationMs = null,
+    Object? detectedLang1 = freezed,
+    Object? detectedLang2 = freezed,
+    Object? detectedLang1Flag = freezed,
+    Object? detectedLang2Flag = freezed,
   }) {
     return _then(_$ConversationStateImpl(
       status: null == status
@@ -789,6 +828,22 @@ class __$$ConversationStateImplCopyWithImpl<$Res>
           ? _value.vadSilenceDurationMs
           : vadSilenceDurationMs // ignore: cast_nullable_to_non_nullable
               as int,
+      detectedLang1: freezed == detectedLang1
+          ? _value.detectedLang1
+          : detectedLang1 // ignore: cast_nullable_to_non_nullable
+              as String?,
+      detectedLang2: freezed == detectedLang2
+          ? _value.detectedLang2
+          : detectedLang2 // ignore: cast_nullable_to_non_nullable
+              as String?,
+      detectedLang1Flag: freezed == detectedLang1Flag
+          ? _value.detectedLang1Flag
+          : detectedLang1Flag // ignore: cast_nullable_to_non_nullable
+              as String?,
+      detectedLang2Flag: freezed == detectedLang2Flag
+          ? _value.detectedLang2Flag
+          : detectedLang2Flag // ignore: cast_nullable_to_non_nullable
+              as String?,
     ));
   }
 }
@@ -807,7 +862,11 @@ class _$ConversationStateImpl implements _ConversationState {
       this.partialTranscript = '',
       this.errorMessage,
       this.vadThreshold = 0.6,
-      this.vadSilenceDurationMs = 400})
+      this.vadSilenceDurationMs = 400,
+      this.detectedLang1,
+      this.detectedLang2,
+      this.detectedLang1Flag,
+      this.detectedLang2Flag})
       : _messages = messages;
 
   @override
@@ -846,10 +905,21 @@ class _$ConversationStateImpl implements _ConversationState {
   @override
   @JsonKey()
   final int vadSilenceDurationMs;
+// Detected languages — populated once the API identifies speech
+  @override
+  final String? detectedLang1;
+// e.g. "English"
+  @override
+  final String? detectedLang2;
+// e.g. "French"
+  @override
+  final String? detectedLang1Flag;
+  @override
+  final String? detectedLang2Flag;
 
   @override
   String toString() {
-    return 'ConversationState(status: $status, messages: $messages, languageConfig: $languageConfig, activeSpeaker: $activeSpeaker, subtitlesEnabled: $subtitlesEnabled, isConnected: $isConnected, isSessionActive: $isSessionActive, partialTranscript: $partialTranscript, errorMessage: $errorMessage, vadThreshold: $vadThreshold, vadSilenceDurationMs: $vadSilenceDurationMs)';
+    return 'ConversationState(status: $status, messages: $messages, languageConfig: $languageConfig, activeSpeaker: $activeSpeaker, subtitlesEnabled: $subtitlesEnabled, isConnected: $isConnected, isSessionActive: $isSessionActive, partialTranscript: $partialTranscript, errorMessage: $errorMessage, vadThreshold: $vadThreshold, vadSilenceDurationMs: $vadSilenceDurationMs, detectedLang1: $detectedLang1, detectedLang2: $detectedLang2, detectedLang1Flag: $detectedLang1Flag, detectedLang2Flag: $detectedLang2Flag)';
   }
 
   @override
@@ -876,7 +946,15 @@ class _$ConversationStateImpl implements _ConversationState {
             (identical(other.vadThreshold, vadThreshold) ||
                 other.vadThreshold == vadThreshold) &&
             (identical(other.vadSilenceDurationMs, vadSilenceDurationMs) ||
-                other.vadSilenceDurationMs == vadSilenceDurationMs));
+                other.vadSilenceDurationMs == vadSilenceDurationMs) &&
+            (identical(other.detectedLang1, detectedLang1) ||
+                other.detectedLang1 == detectedLang1) &&
+            (identical(other.detectedLang2, detectedLang2) ||
+                other.detectedLang2 == detectedLang2) &&
+            (identical(other.detectedLang1Flag, detectedLang1Flag) ||
+                other.detectedLang1Flag == detectedLang1Flag) &&
+            (identical(other.detectedLang2Flag, detectedLang2Flag) ||
+                other.detectedLang2Flag == detectedLang2Flag));
   }
 
   @override
@@ -892,7 +970,11 @@ class _$ConversationStateImpl implements _ConversationState {
       partialTranscript,
       errorMessage,
       vadThreshold,
-      vadSilenceDurationMs);
+      vadSilenceDurationMs,
+      detectedLang1,
+      detectedLang2,
+      detectedLang1Flag,
+      detectedLang2Flag);
 
   /// Create a copy of ConversationState
   /// with the given fields replaced by the non-null parameter values.
@@ -916,7 +998,11 @@ abstract class _ConversationState implements ConversationState {
       final String partialTranscript,
       final String? errorMessage,
       final double vadThreshold,
-      final int vadSilenceDurationMs}) = _$ConversationStateImpl;
+      final int vadSilenceDurationMs,
+      final String? detectedLang1,
+      final String? detectedLang2,
+      final String? detectedLang1Flag,
+      final String? detectedLang2Flag}) = _$ConversationStateImpl;
 
   @override
   ConversationStatus get status;
@@ -939,7 +1025,15 @@ abstract class _ConversationState implements ConversationState {
   @override
   double get vadThreshold;
   @override
-  int get vadSilenceDurationMs;
+  int get vadSilenceDurationMs; // Detected languages — populated once the API identifies speech
+  @override
+  String? get detectedLang1; // e.g. "English"
+  @override
+  String? get detectedLang2; // e.g. "French"
+  @override
+  String? get detectedLang1Flag;
+  @override
+  String? get detectedLang2Flag;
 
   /// Create a copy of ConversationState
   /// with the given fields replaced by the non-null parameter values.

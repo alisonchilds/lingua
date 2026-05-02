@@ -63,6 +63,11 @@ class ConversationState with _$ConversationState {
     String? errorMessage,
     @Default(0.6) double vadThreshold,
     @Default(400) int vadSilenceDurationMs,
+    // Detected languages — populated once the API identifies speech
+    String? detectedLang1,   // e.g. "English"
+    String? detectedLang2,   // e.g. "French"
+    String? detectedLang1Flag,
+    String? detectedLang2Flag,
   }) = _ConversationState;
 }
 

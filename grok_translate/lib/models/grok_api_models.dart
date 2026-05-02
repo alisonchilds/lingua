@@ -71,6 +71,7 @@ enum GrokServerEventType {
   inputAudioBufferSpeechStarted,
   inputAudioBufferSpeechStopped,
   inputAudioBufferCommitted,
+  inputAudioTranscriptionCompleted, // carries detected language
   responseCreated,
   responseAudioDelta,
   responseAudioDone,
@@ -105,6 +106,9 @@ GrokServerEventType grokEventTypeFromString(String type) {
         GrokServerEventType.responseAudioTranscriptDelta,
     'response.output_audio_transcript.done':
         GrokServerEventType.responseAudioTranscriptDone,
+    // Input audio transcription completed — carries transcript + language code
+    'conversation.item.input_audio_transcription.completed':
+        GrokServerEventType.inputAudioTranscriptionCompleted,
     'response.done': GrokServerEventType.responseDone,
     'error': GrokServerEventType.error,
   }[type] ??
@@ -117,9 +121,10 @@ class GrokServerEvent with _$GrokServerEvent {
   const factory GrokServerEvent({
     required GrokServerEventType type,
     String? eventId,
-    String? audioDelta, // base64 PCM16
+    String? audioDelta,      // base64 PCM16
     String? transcriptDelta,
     String? transcriptText,
+    String? detectedLanguage, // ISO language code from transcription event
     String? errorMessage,
     Map<String, dynamic>? raw,
   }) = _GrokServerEvent;

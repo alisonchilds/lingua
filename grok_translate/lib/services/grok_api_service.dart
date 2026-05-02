@@ -209,6 +209,8 @@ class GrokApiService {
           'input': {'format': {'type': 'audio/pcm', 'rate': 16000}},
           'output': {'format': {'type': 'audio/pcm', 'rate': 16000}},
         },
+        // Request input transcription so we get language detection events
+        'input_audio_transcription': {'model': 'whisper-1'},
         'turn_detection': {
           'type': 'server_vad',
           'threshold': vadSettings.threshold,
@@ -263,7 +265,17 @@ class GrokApiService {
       final eventType = grokEventTypeFromString(typeStr);
 
       if (eventType == GrokServerEventType.unknown) {
-        _log.d('Unknown event: $typeStr');
+        _log.d('Unknown event: $typeStr | $json');
+      }
+
+      // Extract detected language from transcription completed event.
+      // xAI returns an ISO-639-1 code in the top-level 'language' field.
+      String? detectedLanguage;
+      if (eventType == GrokServerEventType.inputAudioTranscriptionCompleted) {
+        detectedLanguage = json['language'] as String? ??
+            (json['transcription'] as Map?)
+                ?.cast<String, dynamic>()['language'] as String?;
+        _log.d('Detected language: $detectedLanguage');
       }
 
       final event = GrokServerEvent(
@@ -281,6 +293,7 @@ class GrokApiService {
             (eventType == GrokServerEventType.responseAudioTranscriptDone)
                 ? json['transcript'] as String?
                 : null,
+        detectedLanguage: detectedLanguage,
         errorMessage: (eventType == GrokServerEventType.error)
             ? (json['error'] as Map?)?.cast<String, dynamic>()['message']
                     as String? ??

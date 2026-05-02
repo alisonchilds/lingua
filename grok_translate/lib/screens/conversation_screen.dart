@@ -68,7 +68,7 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
     return Scaffold(
       appBar: AppBar(
         leading: const SizedBox.shrink(),
-        title: _LanguageBadgeRow(config: state.languageConfig),
+        title: _LanguageBadgeRow(state: state),
         actions: [
           // Connection indicator
           Padding(
@@ -154,19 +154,32 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
 // ---------------------------------------------------------------------------
 
 class _LanguageBadgeRow extends StatelessWidget {
-  const _LanguageBadgeRow({required this.config});
-  final LanguageConfig? config;
+  const _LanguageBadgeRow({required this.state});
+  final ConversationState state;
 
   @override
   Widget build(BuildContext context) {
-    final cfg = config ?? const LanguageConfig();
+    final cfg = state.languageConfig ?? const LanguageConfig();
     final theme = Theme.of(context);
+
+    // Show detected language if available, otherwise show config or 'Auto'
+    final lang1 = state.detectedLang1 ??
+        (cfg.autoDetect ? 'Auto' : cfg.lang1Name);
+    final lang1Flag = state.detectedLang1Flag ?? (cfg.autoDetect ? '🌐' : '');
+    final detected1 = state.detectedLang1 != null;
+
+    final lang2 = state.detectedLang2 ??
+        (cfg.autoDetect ? 'Auto' : cfg.lang2Name);
+    final lang2Flag = state.detectedLang2Flag ?? (cfg.autoDetect ? '🌐' : '');
+    final detected2 = state.detectedLang2 != null;
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         _LangChip(
-          name: cfg.autoDetect ? 'Auto' : cfg.lang1Name,
+          name: lang1Flag.isNotEmpty ? '$lang1Flag $lang1' : lang1,
           color: AppTheme.user1Color,
+          detected: detected1,
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -174,8 +187,9 @@ class _LanguageBadgeRow extends StatelessWidget {
               size: 16, color: theme.colorScheme.onSurfaceVariant),
         ),
         _LangChip(
-          name: cfg.autoDetect ? 'Auto' : cfg.lang2Name,
+          name: lang2Flag.isNotEmpty ? '$lang2Flag $lang2' : lang2,
           color: AppTheme.user2Color,
+          detected: detected2,
         ),
       ],
     );
@@ -183,22 +197,34 @@ class _LanguageBadgeRow extends StatelessWidget {
 }
 
 class _LangChip extends StatelessWidget {
-  const _LangChip({required this.name, required this.color});
+  const _LangChip({
+    required this.name,
+    required this.color,
+    this.detected = false,
+  });
   final String name;
   final Color color;
+  final bool detected;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
+        color: color.withValues(alpha: detected ? 0.18 : 0.1),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
+        border: Border.all(
+            color: color.withValues(alpha: detected ? 0.7 : 0.4),
+            width: detected ? 1.5 : 1.0),
       ),
-      child: Text(name,
-          style: TextStyle(
-              color: color, fontWeight: FontWeight.w600, fontSize: 12)),
+      child: Text(
+        name,
+        style: TextStyle(
+            color: color,
+            fontWeight: detected ? FontWeight.w700 : FontWeight.w600,
+            fontSize: 12),
+      ),
     );
   }
 }

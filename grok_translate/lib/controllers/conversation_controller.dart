@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../models/conversation_models.dart';
+// kSupportedLanguages used for ISO code → display name lookup
 import '../models/grok_api_models.dart';
 import '../services/audio_player_service.dart';
 import '../services/grok_api_service.dart';
@@ -332,6 +333,12 @@ class ConversationController extends StateNotifier<ConversationState> {
         _setError(event.errorMessage ?? 'Unknown API error');
         break;
 
+      case GrokServerEventType.inputAudioTranscriptionCompleted:
+        if (event.detectedLanguage != null) {
+          _updateDetectedLanguage(event.detectedLanguage!);
+        }
+        break;
+
       case GrokServerEventType.inputAudioBufferCommitted:
       case GrokServerEventType.unknown:
         break;
@@ -368,6 +375,32 @@ class ConversationController extends StateNotifier<ConversationState> {
     final last = state.messages.last.speaker;
     return last == Speaker.user1 ? Speaker.user2 : Speaker.user1;
   }
+
+  /// Map ISO-639-1 code → display name + flag using the supported languages list.
+  void _updateDetectedLanguage(String isoCode) {
+    final code = isoCode.toLowerCase().split('-').first; // 'en-US' → 'en'
+    final match = kSupportedLanguages.firstWhere(
+      (l) => l.code == code,
+      orElse: () => SupportedLanguage(code, _capitalize(code), '🌐'),
+    );
+
+    // Assign alternately: first detection → lang1, second different → lang2
+    if (state.detectedLang1 == null) {
+      state = state.copyWith(
+        detectedLang1: match.name,
+        detectedLang1Flag: match.flag,
+      );
+    } else if (state.detectedLang2 == null &&
+        match.name != state.detectedLang1) {
+      state = state.copyWith(
+        detectedLang2: match.name,
+        detectedLang2Flag: match.flag,
+      );
+    }
+  }
+
+  String _capitalize(String s) =>
+      s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
 
   void _setStatus(ConversationStatus status) {
     if (state.status != status) {
