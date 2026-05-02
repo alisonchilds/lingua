@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../controllers/conversation_controller.dart';
 import '../models/conversation_models.dart';
 import '../router/app_router.dart';
+import '../services/grok_api_service.dart';
 import '../widgets/api_key_dialog.dart';
 import '../widgets/language_selector.dart';
 
@@ -21,12 +23,15 @@ class _LanguageSetupScreenState extends ConsumerState<LanguageSetupScreen> {
   late LanguageConfig _config;
   bool _hasApiKey = false;
 
+  // On web the Cloudflare Worker holds the key — no key required from the user.
+  bool get _keyRequired => !kIsWeb;
+
   @override
   void initState() {
     super.initState();
-    final state = ref.read(conversationControllerProvider);
-    _config = state.languageConfig ?? const LanguageConfig();
-    _checkApiKey();
+    _config = ref.read(conversationControllerProvider).languageConfig ??
+        const LanguageConfig();
+    if (_keyRequired) _checkApiKey();
   }
 
   Future<void> _checkApiKey() async {
@@ -46,7 +51,8 @@ class _LanguageSetupScreenState extends ConsumerState<LanguageSetupScreen> {
   }
 
   Future<void> _startConversation() async {
-    if (!_hasApiKey) {
+    // Native only: require a key before proceeding.
+    if (_keyRequired && !_hasApiKey) {
       await _promptApiKey();
       if (!_hasApiKey) return;
     }
@@ -92,11 +98,16 @@ class _LanguageSetupScreenState extends ConsumerState<LanguageSetupScreen> {
                   begin: -0.2, end: 0, duration: 400.ms, curve: Curves.easeOut),
               const SizedBox(height: 40),
 
-              // API key status
-              _ApiKeyBadge(
-                hasKey: _hasApiKey,
-                onTap: _promptApiKey,
-              ).animate().fadeIn(duration: 400.ms, delay: 100.ms),
+              // API key badge — shown on native only; web uses the proxy
+              if (_keyRequired)
+                _ApiKeyBadge(
+                  hasKey: _hasApiKey,
+                  onTap: _promptApiKey,
+                ).animate().fadeIn(duration: 400.ms, delay: 100.ms)
+              else
+                _ProxyBadge()
+                    .animate()
+                    .fadeIn(duration: 400.ms, delay: 100.ms),
               const SizedBox(height: 32),
 
               // Auto-detect toggle
@@ -115,7 +126,7 @@ class _LanguageSetupScreenState extends ConsumerState<LanguageSetupScreen> {
               ).animate().fadeIn(duration: 400.ms, delay: 150.ms),
               const SizedBox(height: 16),
 
-              // Language selectors
+              // Language selectors (shown when auto-detect is off)
               if (!_config.autoDetect)
                 Card(
                   child: Padding(
@@ -166,7 +177,6 @@ class _LanguageSetupScreenState extends ConsumerState<LanguageSetupScreen> {
                   begin: 0.3, end: 0, duration: 400.ms, delay: 300.ms),
               const SizedBox(height: 12),
 
-              // Hint
               Text(
                 'Place the phone between both speakers.',
                 textAlign: TextAlign.center,
@@ -180,6 +190,8 @@ class _LanguageSetupScreenState extends ConsumerState<LanguageSetupScreen> {
     );
   }
 }
+
+// ── Sub-widgets ───────────────────────────────────────────────────────────────
 
 class _HeroSection extends StatelessWidget {
   @override
@@ -222,6 +234,52 @@ class _HeroSection extends StatelessWidget {
   }
 }
 
+/// Shown on web — confirms the Cloudflare Worker proxy is handling auth.
+class _ProxyBadge extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // Extract just the hostname for display
+    final host = Uri.parse(GrokApiService.kProxyUrl).host;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.green.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.green.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.shield_outlined, color: Colors.green, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Secure proxy active',
+                  style: TextStyle(
+                      color: Colors.green,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14),
+                ),
+                Text(
+                  host,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.outline),
+                ),
+              ],
+            ),
+          ),
+          const Icon(Icons.check_circle_outline,
+              size: 18, color: Colors.green),
+        ],
+      ),
+    );
+  }
+}
+
+/// Shown on native — prompts the user to enter their xAI API key.
 class _ApiKeyBadge extends StatelessWidget {
   const _ApiKeyBadge({required this.hasKey, required this.onTap});
   final bool hasKey;
