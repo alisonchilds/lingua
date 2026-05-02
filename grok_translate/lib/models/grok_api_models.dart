@@ -93,13 +93,17 @@ GrokServerEventType grokEventTypeFromString(String type) {
     'input_audio_buffer.committed':
         GrokServerEventType.inputAudioBufferCommitted,
     'response.created': GrokServerEventType.responseCreated,
-    // xAI uses response.output_audio.delta / .done (not response.audio.*)
+    // xAI audio events
     'response.output_audio.delta': GrokServerEventType.responseAudioDelta,
     'response.output_audio.done': GrokServerEventType.responseAudioDone,
-    // Transcript events
+    // xAI transcript events (both naming conventions, just in case)
     'response.audio_transcript.delta':
         GrokServerEventType.responseAudioTranscriptDelta,
     'response.audio_transcript.done':
+        GrokServerEventType.responseAudioTranscriptDone,
+    'response.output_audio_transcript.delta':
+        GrokServerEventType.responseAudioTranscriptDelta,
+    'response.output_audio_transcript.done':
         GrokServerEventType.responseAudioTranscriptDone,
     'response.done': GrokServerEventType.responseDone,
     'error': GrokServerEventType.error,

@@ -801,7 +801,7 @@ class _$ConversationStateImpl implements _ConversationState {
       final List<TranslationMessage> messages = const [],
       this.languageConfig,
       this.activeSpeaker,
-      this.subtitlesEnabled = false,
+      this.subtitlesEnabled = true,
       this.isConnected = false,
       this.isSessionActive = false,
       this.partialTranscript = '',

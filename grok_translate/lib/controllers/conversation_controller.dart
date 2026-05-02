@@ -289,16 +289,43 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.responseAudioTranscriptDone:
-        final finalText = event.transcriptText ?? _transcriptBuffer.toString();
-        if (finalText.isNotEmpty && state.subtitlesEnabled) {
-          _addMessage(finalText);
+        final transcriptText =
+            event.transcriptText ?? _transcriptBuffer.toString();
+        if (transcriptText.isNotEmpty) {
+          _addMessage(transcriptText);
         }
         state = state.copyWith(partialTranscript: '');
         _transcriptBuffer.clear();
         break;
 
       case GrokServerEventType.responseDone:
-        // No additional action needed – audio.done already triggers playback
+        // Fallback: extract transcript from response.done output array
+        // in case response.audio_transcript.done was not sent.
+        if (_transcriptBuffer.isNotEmpty) {
+          _addMessage(_transcriptBuffer.toString());
+          _transcriptBuffer.clear();
+          state = state.copyWith(partialTranscript: '');
+        } else {
+          // Try to pull text from the raw event's output array
+          final raw = event.raw;
+          if (raw != null) {
+            final response = raw['response'] as Map?;
+            final output = response?['output'] as List?;
+            if (output != null) {
+              for (final item in output) {
+                final content = ((item as Map?)?.cast<String, dynamic>())?['content'] as List?;
+                if (content != null) {
+                  for (final part in content) {
+                    final transcript = ((part as Map?)?.cast<String, dynamic>())?['transcript'] as String?;
+                    if (transcript != null && transcript.isNotEmpty) {
+                      _addMessage(transcript);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
         break;
 
       case GrokServerEventType.error:

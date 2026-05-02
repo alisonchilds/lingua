@@ -56,7 +56,7 @@ class ConversationState with _$ConversationState {
     @Default([]) List<TranslationMessage> messages,
     LanguageConfig? languageConfig,
     Speaker? activeSpeaker,
-    @Default(false) bool subtitlesEnabled,
+    @Default(true) bool subtitlesEnabled,
     @Default(false) bool isConnected,
     @Default(false) bool isSessionActive,
     @Default('') String partialTranscript,
