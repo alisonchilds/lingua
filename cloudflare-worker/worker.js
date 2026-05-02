@@ -193,10 +193,14 @@ export default {
 function isAllowedOrigin(origin) {
   if (!origin) return false;
   if (ALLOWED_ORIGINS.has(origin)) return true;
-  // Allow any localhost regardless of port
   try {
     const u = new URL(origin);
+    // Allow any localhost regardless of port (local Flutter web dev)
     if (u.hostname === "localhost" || u.hostname === "127.0.0.1") return true;
+    // Allow all Cloudflare-owned preview domains
+    if (u.hostname.endsWith(".trycloudflare.com")) return true;
+    if (u.hostname.endsWith(".pages.dev")) return true;
+    if (u.hostname.endsWith(".workers.dev")) return true;
   } catch (_) {}
   return false;
 }
