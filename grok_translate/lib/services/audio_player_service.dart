@@ -50,7 +50,8 @@ class AudioPlayerService {
     }
     _isBuffering = false;
     final pcm = Uint8List.fromList(_pcmBuffer);
-    final wav = GrokAudioService.pcm16ToWav(pcm);
+    // Use 16 kHz to match the session audio output format configured in session.update
+    final wav = GrokAudioService.pcm16ToWav(pcm, rate: GrokAudioService.sampleRate);
     _pcmBuffer.clear();
 
     try {

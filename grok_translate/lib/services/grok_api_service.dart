@@ -178,7 +178,12 @@ class GrokApiService {
       'type': 'session.update',
       'session': {
         'instructions': instructions,
-        'voice': 'eve', // xAI voice name (not OpenAI's 'alloy')
+        'voice': 'eve',
+        // xAI audio format schema (different from OpenAI's flat field names)
+        'audio': {
+          'input': {'format': {'type': 'audio/pcm', 'rate': 16000}},
+          'output': {'format': {'type': 'audio/pcm', 'rate': 16000}},
+        },
         'turn_detection': {
           'type': 'server_vad',
           'threshold': vadSettings.threshold,
