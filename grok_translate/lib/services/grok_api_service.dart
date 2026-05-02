@@ -133,6 +133,13 @@ class GrokApiService {
       }
     } catch (e) {
       _log.e('Connection error: $e');
+      // Surface the error so the UI shows it rather than staying in "listening"
+      if (!_eventController.isClosed) {
+        _eventController.add(GrokServerEvent(
+          type: GrokServerEventType.error,
+          errorMessage: 'Failed to connect: $e',
+        ));
+      }
       _scheduleReconnect();
     }
   }

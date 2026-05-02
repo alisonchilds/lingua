@@ -1,74 +1,67 @@
-// Web-only WebSocket implementation using package:web directly.
-// web_socket_channel's browser implementation has issues in Flutter web release
-// builds. This uses the native browser WebSocket API via dart:js_interop.
+// Web-only WebSocket wrapper using package:web + dart:js_interop.
+// Replaces web_socket_channel on web builds — it has known failures in
+// Flutter web release (dart2js) mode.
 
 import 'dart:async';
 import 'dart:js_interop';
+
 import 'package:web/web.dart' as web;
 
-/// A thin wrapper around the browser WebSocket API that mimics enough of the
-/// web_socket_channel interface for GrokApiService to use.
 class NativeWebSocket {
   NativeWebSocket._(this._ws);
 
   final web.WebSocket _ws;
   final _messageController = StreamController<String>.broadcast();
   final _doneCompleter = Completer<void>();
-
   bool _closed = false;
 
   static Future<NativeWebSocket> connect(Uri uri,
       {List<String> protocols = const []}) async {
-    final ws = protocols.isNotEmpty
-        ? web.WebSocket(uri.toString(), protocols.toList().jsify() as JSArray)
-        : web.WebSocket(uri.toString());
+    // Pass protocols as a JS string (single protocol) or JS array
+    final web.WebSocket ws;
+    if (protocols.isEmpty) {
+      ws = web.WebSocket(uri.toString());
+    } else if (protocols.length == 1) {
+      ws = web.WebSocket(uri.toString(), protocols.first.toJS);
+    } else {
+      final jsProtos = protocols.map((p) => p.toJS).toList().toJS;
+      ws = web.WebSocket(uri.toString(), jsProtos);
+    }
 
     final instance = NativeWebSocket._(ws);
-
     final readyCompleter = Completer<NativeWebSocket>();
 
-    ws.addEventListener(
-      'open',
-      (web.Event _) {
-        if (!readyCompleter.isCompleted) readyCompleter.complete(instance);
-      }.toJS,
-    );
+    ws.addEventListener('open', (web.Event _) {
+      if (!readyCompleter.isCompleted) readyCompleter.complete(instance);
+    }.toJS);
 
-    ws.addEventListener(
-      'error',
-      (web.Event e) {
-        final err = WebSocketException('WebSocket connection failed: $uri');
-        if (!readyCompleter.isCompleted) readyCompleter.completeError(err);
-        if (!instance._doneCompleter.isCompleted) {
-          instance._doneCompleter.completeError(err);
-        }
-      }.toJS,
-    );
+    ws.addEventListener('error', (web.Event _) {
+      final err = Exception('WebSocket failed to connect: $uri');
+      if (!readyCompleter.isCompleted) readyCompleter.completeError(err);
+      if (!instance._doneCompleter.isCompleted) {
+        instance._doneCompleter.completeError(err);
+      }
+    }.toJS);
 
-    ws.addEventListener(
-      'message',
-      (web.MessageEvent evt) {
-        final data = evt.data;
-        if (data != null && !instance._messageController.isClosed) {
-          // data is a JSString for text frames
-          final str = (data as JSString).toDart;
-          instance._messageController.add(str);
+    ws.addEventListener('message', (web.MessageEvent evt) {
+      if (!instance._messageController.isClosed) {
+        // evt.data is a JSString for text frames
+        final raw = evt.data;
+        if (raw != null) {
+          instance._messageController.add((raw as JSString).toDart);
         }
-      }.toJS,
-    );
+      }
+    }.toJS);
 
-    ws.addEventListener(
-      'close',
-      (web.CloseEvent evt) {
-        instance._closed = true;
-        if (!instance._messageController.isClosed) {
-          instance._messageController.close();
-        }
-        if (!instance._doneCompleter.isCompleted) {
-          instance._doneCompleter.complete();
-        }
-      }.toJS,
-    );
+    ws.addEventListener('close', (web.CloseEvent _) {
+      instance._closed = true;
+      if (!instance._messageController.isClosed) {
+        instance._messageController.close();
+      }
+      if (!instance._doneCompleter.isCompleted) {
+        instance._doneCompleter.complete();
+      }
+    }.toJS);
 
     return readyCompleter.future;
   }
@@ -78,7 +71,9 @@ class NativeWebSocket {
   bool get isClosed => _closed;
 
   void send(String data) {
-    if (!_closed) _ws.send(data.toJS);
+    if (!_closed && _ws.readyState == web.WebSocket.OPEN) {
+      _ws.send(data.toJS);
+    }
   }
 
   void close([int? code, String? reason]) {
@@ -93,11 +88,4 @@ class NativeWebSocket {
       } catch (_) {}
     }
   }
-}
-
-class WebSocketException implements Exception {
-  WebSocketException(this.message);
-  final String message;
-  @override
-  String toString() => 'WebSocketException: $message';
 }
