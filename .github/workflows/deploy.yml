@@ -30,7 +30,7 @@ jobs:
 
       - name: Build web
         working-directory: grok_translate
-        run: flutter build web --release --web-renderer canvaskit
+        run: flutter build web --release
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
