@@ -8,46 +8,46 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/conversation_models.dart';
 import '../models/grok_api_models.dart';
+import 'ws_channel_stub.dart'
+    if (dart.library.js_interop) 'ws_channel_web.dart';
 
 /// Handles the persistent WebSocket connection to the Grok Realtime API.
-///
-/// Responsibilities:
-///   - Establish / reconnect the WebSocket.
-///   - Serialize outbound events and stream inbound events.
-///   - No audio or state logic lives here – this is pure transport.
 ///
 /// ── Security / Connection routing ────────────────────────────────────────────
 ///
 ///   Web (browser)
-///   └─▶ [kProxyUrl] Cloudflare Worker proxy
-///       The worker holds the XAI_API_KEY secret and injects the Authorization
-///       header before forwarding to api.x.ai.  The browser never sees the key.
+///   └─▶ [kProxyUrl] Cloudflare Worker proxy  (native browser WebSocket API)
+///       The worker holds the XAI_API_KEY secret and injects Authorization.
+///       Uses dart:js_interop / package:web directly — avoids web_socket_channel
+///       which has known issues in Flutter web release builds.
 ///
 ///   Native (iOS / Android)
-///   └─▶ [kDirectUrl] wss://api.x.ai/v1/realtime  (direct)
-///       dart:io supports custom headers on the WS handshake, so the key is
-///       sent in the Authorization header without ever appearing in the URL.
+///   └─▶ [kDirectUrl] wss://api.x.ai/v1/realtime  (IOWebSocketChannel)
+///       Key sent in Authorization header on the WS handshake.
 ///
 /// ── How to change the proxy URL ──────────────────────────────────────────────
-///   Update [kProxyUrl] below.  That is the only line you need to touch.
+///   Update [kProxyUrl] below. That is the only line you need to touch.
 /// ─────────────────────────────────────────────────────────────────────────────
 class GrokApiService {
-  // ── URLs ────────────────────────────────────────────────────────────────────
-
-  /// Cloudflare Worker proxy – used by web builds.
-  /// The worker injects the XAI_API_KEY secret; no API key is needed client-side.
+  /// Cloudflare Worker proxy – web builds connect here (no API key in browser).
   static const kProxyUrl = 'wss://grok-voice-proxy.alison-ade.workers.dev';
 
-  /// Direct Grok Realtime API endpoint – used by native (iOS/Android) builds.
+  /// Direct Grok Realtime API – native (iOS/Android) builds connect here.
   static const kDirectUrl = 'wss://api.x.ai/v1/realtime';
 
-  /// Grok voice model name – passed as a query param on native direct connections.
+  /// Grok voice model name.
   static const _model = 'grok-voice-think-fast-1.0';
 
   final Logger _log = Logger(printer: PrettyPrinter(methodCount: 0));
 
+  // Web path: native browser WebSocket
+  NativeWebSocket? _nativeWs;
+  StreamSubscription? _nativeWsSub;
+
+  // Native path: IOWebSocketChannel
   WebSocketChannel? _channel;
-  StreamSubscription? _subscription;
+  StreamSubscription? _channelSub;
+
   final _eventController = StreamController<GrokServerEvent>.broadcast();
   final _connectedController = StreamController<bool>.broadcast();
 
@@ -60,67 +60,50 @@ class GrokApiService {
   static const _maxReconnectAttempts = 5;
   Timer? _reconnectTimer;
 
-  /// Broadcast stream of parsed server events.
+  // Keep last config for reconnects
+  LanguageConfig? _lastLangConfig;
+  VadSettings? _lastVadSettings;
+
   Stream<GrokServerEvent> get events => _eventController.stream;
-
-  /// Broadcast stream of connection status changes.
   Stream<bool> get connectionStatus => _connectedController.stream;
-
   bool get isConnected => _connected;
 
   // ---------------------------------------------------------------------------
   // Public API
   // ---------------------------------------------------------------------------
 
-  /// Connect to the Grok Realtime API and send initial session config.
-  ///
-  /// [apiKey] is only required on native builds (used in the Authorization
-  /// header). On web the Cloudflare Worker proxy supplies the key; pass null.
   Future<void> connect({
     String? apiKey,
     required LanguageConfig languageConfig,
     required VadSettings vadSettings,
   }) async {
     _apiKey = apiKey;
+    _lastLangConfig = languageConfig;
+    _lastVadSettings = vadSettings;
     await _connect(languageConfig: languageConfig, vadSettings: vadSettings);
   }
 
-  /// Append a chunk of base64-encoded PCM16 audio to the input buffer.
   void appendAudio(String base64Audio) {
-    _sendRaw({
-      'type': 'input_audio_buffer.append',
-      'audio': base64Audio,
-    });
+    _send({'type': 'input_audio_buffer.append', 'audio': base64Audio});
   }
 
-  /// Commit the audio buffer (manual VAD mode – unused in server_vad).
-  void commitAudio() {
-    _sendRaw({'type': 'input_audio_buffer.commit'});
-  }
+  void commitAudio() => _send({'type': 'input_audio_buffer.commit'});
+  void requestResponse() => _send({'type': 'response.create'});
+  void cancelResponse() => _send({'type': 'response.cancel'});
 
-  /// Request the model to generate a response (typically after commit).
-  void requestResponse() {
-    _sendRaw({'type': 'response.create'});
-  }
-
-  /// Cancel the in-progress response (barge-in).
-  void cancelResponse() {
-    _sendRaw({'type': 'response.cancel'});
-  }
-
-  /// Update VAD / session settings mid-conversation.
   void updateSession({
     required LanguageConfig languageConfig,
     required VadSettings vadSettings,
   }) {
+    _lastLangConfig = languageConfig;
+    _lastVadSettings = vadSettings;
     _sendSessionUpdate(languageConfig: languageConfig, vadSettings: vadSettings);
   }
 
-  /// Close the WebSocket cleanly.
   Future<void> disconnect() async {
     _reconnectTimer?.cancel();
-    _reconnectAttempts = _maxReconnectAttempts; // prevent auto-reconnect
-    await _closeChannel();
+    _reconnectAttempts = _maxReconnectAttempts;
+    await _closeAll();
     _setConnected(false);
   }
 
@@ -132,41 +115,79 @@ class GrokApiService {
   }
 
   // ---------------------------------------------------------------------------
-  // Private helpers
+  // Private – connection
   // ---------------------------------------------------------------------------
 
   Future<void> _connect({
     required LanguageConfig languageConfig,
     required VadSettings vadSettings,
   }) async {
-    // On web we use the Cloudflare Worker proxy — no API key needed client-side.
-    // On native we still require the key for the direct Authorization header.
     if (!kIsWeb && _apiKey == null) return;
-    await _closeChannel();
+    await _closeAll();
 
     try {
-      _log.i('Connecting to Grok Realtime API…');
-      _channel = _buildChannel();
-
-      _subscription = _channel!.stream.listen(
-        _onMessage,
-        onError: _onError,
-        onDone: _onDone,
-      );
-
-      // Wait briefly for the connection to succeed before sending the session
-      // update (the channel does not expose an explicit 'connected' event).
-      await Future.delayed(const Duration(milliseconds: 300));
-      _setConnected(true);
-      _reconnectAttempts = 0;
-
-      _sendSessionUpdate(
-          languageConfig: languageConfig, vadSettings: vadSettings);
-      _log.i('Connected & session configured.');
+      if (kIsWeb) {
+        await _connectWeb(languageConfig: languageConfig, vadSettings: vadSettings);
+      } else {
+        _connectNative(languageConfig: languageConfig, vadSettings: vadSettings);
+      }
     } catch (e) {
       _log.e('Connection error: $e');
-      _scheduleReconnect(languageConfig: languageConfig, vadSettings: vadSettings);
+      _scheduleReconnect();
     }
+  }
+
+  Future<void> _connectWeb({
+    required LanguageConfig languageConfig,
+    required VadSettings vadSettings,
+  }) async {
+    _log.i('Web: connecting via proxy → $kProxyUrl');
+    // Use native browser WebSocket (avoids web_socket_channel issues on web)
+    _nativeWs = await NativeWebSocket.connect(
+      Uri.parse(kProxyUrl),
+      protocols: ['realtime'],
+    );
+
+    _nativeWsSub = _nativeWs!.stream.listen(
+      _onMessage,
+      onError: _onError,
+      onDone: _onDone,
+    );
+
+    _setConnected(true);
+    _reconnectAttempts = 0;
+    _sendSessionUpdate(languageConfig: languageConfig, vadSettings: vadSettings);
+    _log.i('Web WebSocket connected & session configured.');
+  }
+
+  void _connectNative({
+    required LanguageConfig languageConfig,
+    required VadSettings vadSettings,
+  }) {
+    _log.i('Native: connecting directly → $kDirectUrl');
+    final uri = Uri.parse('$kDirectUrl?model=$_model');
+    _channel = IOWebSocketChannel.connect(
+      uri,
+      protocols: ['realtime'],
+      headers: {'Authorization': 'Bearer $_apiKey'},
+    );
+
+    _channelSub = _channel!.stream.listen(
+      _onMessage,
+      onError: _onError,
+      onDone: _onDone,
+    );
+
+    // IOWebSocketChannel doesn't have an explicit "connected" callback;
+    // optimistically mark connected and let errors correct it.
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (!_disposed) {
+        _setConnected(true);
+        _reconnectAttempts = 0;
+        _sendSessionUpdate(
+            languageConfig: languageConfig, vadSettings: vadSettings);
+      }
+    });
   }
 
   void _sendSessionUpdate({
@@ -174,12 +195,11 @@ class GrokApiService {
     required VadSettings vadSettings,
   }) {
     final instructions = _buildSystemPrompt(languageConfig);
-    _sendRaw({
+    _send({
       'type': 'session.update',
       'session': {
         'instructions': instructions,
         'voice': 'eve',
-        // xAI audio format schema (different from OpenAI's flat field names)
         'audio': {
           'input': {'format': {'type': 'audio/pcm', 'rate': 16000}},
           'output': {'format': {'type': 'audio/pcm', 'rate': 16000}},
@@ -206,16 +226,47 @@ class GrokApiService {
         'The two languages are $l1 and $l2.';
   }
 
+  // ---------------------------------------------------------------------------
+  // Private – send
+  // ---------------------------------------------------------------------------
+
+  void _send(Map<String, dynamic> payload) {
+    if (!_connected) {
+      _log.w('Cannot send – not connected.');
+      return;
+    }
+    final encoded = jsonEncode(payload);
+    try {
+      if (kIsWeb) {
+        _nativeWs?.send(encoded);
+      } else {
+        _channel?.sink.add(encoded);
+      }
+    } catch (e) {
+      _log.e('Send error: $e');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private – event handling
+  // ---------------------------------------------------------------------------
+
   void _onMessage(dynamic raw) {
     try {
       final json = jsonDecode(raw as String) as Map<String, dynamic>;
       final typeStr = json['type'] as String? ?? '';
       final eventType = grokEventTypeFromString(typeStr);
 
+      if (eventType == GrokServerEventType.unknown) {
+        _log.d('Unknown event: $typeStr');
+      }
+
       final event = GrokServerEvent(
         type: eventType,
         eventId: json['event_id'] as String?,
-        audioDelta: json['delta'] as String?,
+        audioDelta: (eventType == GrokServerEventType.responseAudioDelta)
+            ? json['delta'] as String?
+            : null,
         transcriptDelta: (eventType ==
                     GrokServerEventType.responseAudioTranscriptDelta ||
                 eventType == GrokServerEventType.responseAudioTranscriptDone)
@@ -233,14 +284,7 @@ class GrokApiService {
         raw: json,
       );
 
-      // Log unknown events so we can discover any API naming differences
-      if (eventType == GrokServerEventType.unknown) {
-        _log.d('Unknown event type: $typeStr | raw: $raw');
-      }
-
-      if (!_eventController.isClosed) {
-        _eventController.add(event);
-      }
+      if (!_eventController.isClosed) _eventController.add(event);
     } catch (e) {
       _log.w('Failed to parse server event: $e\nRaw: $raw');
     }
@@ -260,86 +304,41 @@ class GrokApiService {
   void _onDone() {
     _log.w('WebSocket closed.');
     _setConnected(false);
-    // Attempt reconnect if not intentionally disconnected
     if (!_disposed && _reconnectAttempts < _maxReconnectAttempts) {
-      _scheduleReconnect(
-        languageConfig: const LanguageConfig(),
-        vadSettings: const VadSettings(),
-      );
+      _scheduleReconnect();
     }
   }
 
-  void _scheduleReconnect({
-    required LanguageConfig languageConfig,
-    required VadSettings vadSettings,
-  }) {
+  void _scheduleReconnect() {
     if (_disposed || _reconnectAttempts >= _maxReconnectAttempts) return;
     final delay = Duration(seconds: (1 << _reconnectAttempts).clamp(1, 30));
     _reconnectAttempts++;
     _log.i('Reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, () {
-      _connect(languageConfig: languageConfig, vadSettings: vadSettings);
+      _connect(
+        languageConfig: _lastLangConfig ?? const LanguageConfig(),
+        vadSettings: _lastVadSettings ?? const VadSettings(),
+      );
     });
   }
 
-  /// Build the correct [WebSocketChannel] for the current platform.
-  ///
-  /// Web  → connects to [kProxyUrl] (Cloudflare Worker).
-  ///         The worker adds `Authorization: Bearer <secret>` before forwarding
-  ///         to api.x.ai.  No API key is present anywhere in the browser.
-  ///
-  /// Native → connects directly to [kDirectUrl] with the Authorization header.
-  ///          dart:io supports custom headers on the WS handshake.
-  WebSocketChannel _buildChannel() {
-    if (kIsWeb) {
-      // ── Web: route through the Cloudflare Worker proxy ───────────────────
-      // The proxy URL (kProxyUrl) is the ONLY change needed to point at a
-      // different worker — all session/audio/VAD logic is untouched.
-      _log.i('Web: connecting via Cloudflare proxy → $kProxyUrl');
-      return WebSocketChannel.connect(
-        Uri.parse(kProxyUrl),
-        protocols: ['realtime'],
-      );
-    } else {
-      // ── Native: direct connection with Authorization header ───────────────
-      final uri = Uri.parse('$kDirectUrl?model=$_model');
-      _log.i('Native: connecting directly → $kDirectUrl');
-      return IOWebSocketChannel.connect(
-        uri,
-        protocols: ['realtime'],
-        headers: {'Authorization': 'Bearer $_apiKey'},
-      );
-    }
-  }
+  Future<void> _closeAll() async {
+    await _nativeWsSub?.cancel();
+    _nativeWsSub = null;
+    _nativeWs?.close(1000);
+    _nativeWs = null;
 
-  void _sendRaw(Map<String, dynamic> payload) {
-    if (!_connected || _channel == null) {
-      _log.w('Cannot send – not connected.');
-      return;
-    }
-    try {
-      _channel!.sink.add(jsonEncode(payload));
-    } catch (e) {
-      _log.e('Send error: $e');
-    }
-  }
-
-  Future<void> _closeChannel() async {
-    await _subscription?.cancel();
-    _subscription = null;
-    try {
-      await _channel?.sink.close();
-    } catch (_) {}
+    await _channelSub?.cancel();
+    _channelSub = null;
+    try { await _channel?.sink.close(); } catch (_) {}
     _channel = null;
   }
 
   void _setConnected(bool value) {
     if (_connected != value) {
       _connected = value;
-      if (!_connectedController.isClosed) {
-        _connectedController.add(value);
-      }
+      if (!_connectedController.isClosed) _connectedController.add(value);
     }
   }
 }
