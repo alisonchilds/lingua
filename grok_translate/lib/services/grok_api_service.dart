@@ -16,20 +16,32 @@ import '../models/grok_api_models.dart';
 ///   - Serialize outbound events and stream inbound events.
 ///   - No audio or state logic lives here – this is pure transport.
 ///
-/// Connection routing:
-///   Web  → Cloudflare Worker proxy (keeps API key server-side, no auth header in browser)
-///   Native (iOS/Android) → Grok API directly (Authorization header on the WS handshake)
+/// ── Security / Connection routing ────────────────────────────────────────────
 ///
-/// To set the worker URL: update [_workerUrl] below with your deployed worker's
-/// wss:// address, e.g. wss://grok-translate-proxy.YOUR-SUBDOMAIN.workers.dev
+///   Web (browser)
+///   └─▶ [kProxyUrl] Cloudflare Worker proxy
+///       The worker holds the XAI_API_KEY secret and injects the Authorization
+///       header before forwarding to api.x.ai.  The browser never sees the key.
+///
+///   Native (iOS / Android)
+///   └─▶ [kDirectUrl] wss://api.x.ai/v1/realtime  (direct)
+///       dart:io supports custom headers on the WS handshake, so the key is
+///       sent in the Authorization header without ever appearing in the URL.
+///
+/// ── How to change the proxy URL ──────────────────────────────────────────────
+///   Update [kProxyUrl] below.  That is the only line you need to touch.
+/// ─────────────────────────────────────────────────────────────────────────────
 class GrokApiService {
-  /// Direct Grok API endpoint – used by native apps (Authorization header supported).
-  static const _directUrl = 'wss://api.x.ai/v1/realtime';
+  // ── URLs ────────────────────────────────────────────────────────────────────
 
-  /// Cloudflare Worker proxy URL – used on web (browser blocks custom WS headers).
-  /// Replace this with your deployed worker URL after deploying cloudflare-worker/worker.js
-  static const _workerUrl = 'wss://grok-translate-proxy.YOUR-SUBDOMAIN.workers.dev';
+  /// Cloudflare Worker proxy – used by web builds.
+  /// The worker injects the XAI_API_KEY secret; no API key is needed client-side.
+  static const kProxyUrl = 'wss://grok-voice-proxy.alison-ade.workers.dev';
 
+  /// Direct Grok Realtime API endpoint – used by native (iOS/Android) builds.
+  static const kDirectUrl = 'wss://api.x.ai/v1/realtime';
+
+  /// Grok model name sent in the session.update message.
   static const _model = 'grok-2-1212';
 
   final Logger _log = Logger(printer: PrettyPrinter(methodCount: 0));
@@ -61,8 +73,11 @@ class GrokApiService {
   // ---------------------------------------------------------------------------
 
   /// Connect to the Grok Realtime API and send initial session config.
+  ///
+  /// [apiKey] is only required on native builds (used in the Authorization
+  /// header). On web the Cloudflare Worker proxy supplies the key; pass null.
   Future<void> connect({
-    required String apiKey,
+    String? apiKey,
     required LanguageConfig languageConfig,
     required VadSettings vadSettings,
   }) async {
@@ -124,18 +139,13 @@ class GrokApiService {
     required LanguageConfig languageConfig,
     required VadSettings vadSettings,
   }) async {
-    if (_apiKey == null) return;
+    // On web we use the Cloudflare Worker proxy — no API key needed client-side.
+    // On native we still require the key for the direct Authorization header.
+    if (!kIsWeb && _apiKey == null) return;
     await _closeChannel();
 
     try {
       _log.i('Connecting to Grok Realtime API…');
-
-      // Browsers cannot send custom headers on WebSocket connections — the
-      // Web platform spec forbids it. On web we embed the key in the URL as
-      // a query parameter. On native (iOS/Android) we use the Authorization
-      // header, which web_socket_channel passes through the IO socket.
-      // → For production, route through a backend proxy to avoid exposing
-      //   the key in the browser URL bar / server logs.
       _channel = _buildChannel();
 
       _subscription = _channel!.stream.listen(
@@ -268,26 +278,28 @@ class GrokApiService {
     });
   }
 
-  /// Build the correct WebSocketChannel depending on platform.
+  /// Build the correct [WebSocketChannel] for the current platform.
   ///
-  /// Web  → Cloudflare Worker proxy. No API key in the browser; the worker
-  ///         injects the Authorization header server-side using its secret.
+  /// Web  → connects to [kProxyUrl] (Cloudflare Worker).
+  ///         The worker adds `Authorization: Bearer <secret>` before forwarding
+  ///         to api.x.ai.  No API key is present anywhere in the browser.
   ///
-  /// Native (iOS/Android) → Direct connection to Grok with Authorization header.
-  ///         dart:io supports custom headers on the WebSocket handshake.
+  /// Native → connects directly to [kDirectUrl] with the Authorization header.
+  ///          dart:io supports custom headers on the WS handshake.
   WebSocketChannel _buildChannel() {
     if (kIsWeb) {
-      // Web: connect through the Cloudflare Worker proxy.
-      // The worker adds the Authorization header — no key needed client-side.
-      // Falls back to direct URL + query param if the worker URL is not configured.
-      final useProxy = !_workerUrl.contains('YOUR-SUBDOMAIN');
-      final uri = useProxy
-          ? Uri.parse(_workerUrl)
-          : Uri.parse('$_directUrl?model=$_model&api_key=$_apiKey');
-      return WebSocketChannel.connect(uri, protocols: ['realtime']);
+      // ── Web: route through the Cloudflare Worker proxy ───────────────────
+      // The proxy URL (kProxyUrl) is the ONLY change needed to point at a
+      // different worker — all session/audio/VAD logic is untouched.
+      _log.i('Web: connecting via Cloudflare proxy → $kProxyUrl');
+      return WebSocketChannel.connect(
+        Uri.parse(kProxyUrl),
+        protocols: ['realtime'],
+      );
     } else {
-      // Native: direct connection with the Authorization header.
-      final uri = Uri.parse('$_directUrl?model=$_model');
+      // ── Native: direct connection with Authorization header ───────────────
+      final uri = Uri.parse('$kDirectUrl?model=$_model');
+      _log.i('Native: connecting directly → $kDirectUrl');
       return IOWebSocketChannel.connect(
         uri,
         protocols: ['realtime'],

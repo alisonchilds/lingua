@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logger/logger.dart';
 import 'package:uuid/uuid.dart';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+
 import '../models/conversation_models.dart';
 import '../models/grok_api_models.dart';
 import '../services/audio_player_service.dart';
@@ -128,9 +130,14 @@ class ConversationController extends StateNotifier<ConversationState> {
   // ---------------------------------------------------------------------------
 
   /// Start a translation session.
+  ///
+  /// On web the Cloudflare Worker proxy holds the API key, so no key is needed
+  /// from the user. On native (iOS/Android) a key must be stored in Settings.
   Future<void> startSession({String? apiKey}) async {
+    // Web: proxy handles auth — skip the key check entirely.
+    // Native: require a locally stored key for the direct Authorization header.
     final key = apiKey ?? _prefs.getApiKey();
-    if (key == null || key.isEmpty) {
+    if (!kIsWeb && (key == null || key.isEmpty)) {
       _setError('API key not configured. Please enter it in Settings.');
       return;
     }

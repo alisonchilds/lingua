@@ -35,8 +35,9 @@
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
-const GROK_API_URL =
-  "wss://api.x.ai/v1/realtime?model=grok-2-1212";
+// The Grok Realtime API endpoint. Update the model name here when xAI releases
+// newer voice models (e.g. grok-voice-think-fast-1.0 once it's GA).
+const GROK_API_URL = "wss://api.x.ai/v1/realtime?model=grok-2-1212";
 
 /**
  * Origins allowed to connect to this proxy.
@@ -44,12 +45,16 @@ const GROK_API_URL =
  * Keep localhost entries for local Flutter web development.
  */
 const ALLOWED_ORIGINS = new Set([
-  "https://YOUR_APP_DOMAIN",          // ← replace this before deploying to prod
+  // ── Production ────────────────────────────────────────────────────────────
+  "https://YOUR_APP_DOMAIN",          // ← replace with your production domain
+  // ── Local development ─────────────────────────────────────────────────────
   "http://localhost:3000",
   "http://localhost:8080",
   "http://localhost:5000",
-  // Cloudflare Pages preview URLs — add yours if you use Pages:
-  // "https://grok-translate.pages.dev",
+  // ── Cloudflare Tunnel (dev preview) ───────────────────────────────────────
+  // Add your trycloudflare.com URL here if you want the tunnel to work with
+  // the deployed worker (the localhost check below covers it automatically).
+  // "https://your-tunnel-id.trycloudflare.com",
 ]);
 
 // ─── Main Handler ─────────────────────────────────────────────────────────────
