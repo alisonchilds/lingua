@@ -1,0 +1,59 @@
+name: grok_translate
+description: "Grok Translate – Universal real-time voice translator powered by the Grok Voice Agent API."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.7.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  # Navigation
+  go_router: ^14.0.0
+
+  # Audio I/O
+  just_audio: ^0.9.40
+  flutter_sound: ^9.2.13
+  record: ^5.1.2          # Cross-platform mic capture (web + mobile)
+  audioplayers: ^6.0.0    # Fallback audio playback for PCM bytes on web
+
+  # WebSocket
+  web_socket_channel: ^3.0.1
+
+  # Models
+  freezed_annotation: ^2.4.1
+  json_annotation: ^4.9.0
+
+  # Utilities
+  permission_handler: ^11.3.1
+  shared_preferences: ^2.3.2
+  flutter_animate: ^4.5.0
+  # waveform_flutter removed – custom waveform built with flutter_animate
+  path_provider: ^2.1.4
+  logger: ^2.4.0
+  uuid: ^4.4.2
+  intl: ^0.19.0
+  web: ^1.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  build_runner: ^2.4.13
+  freezed: ^2.5.7
+  json_serializable: ^6.8.0
+  riverpod_generator: ^2.4.3
+  custom_lint: ^0.6.7
+  riverpod_lint: ^2.3.13
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icons/
+    - assets/audio/
