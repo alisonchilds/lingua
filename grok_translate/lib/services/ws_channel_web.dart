@@ -15,19 +15,10 @@ class NativeWebSocket {
   final _doneCompleter = Completer<void>();
   bool _closed = false;
 
-  static Future<NativeWebSocket> connect(Uri uri,
-      {List<String> protocols = const []}) async {
-    // Pass protocols as a JS string (single protocol) or JS array
-    final web.WebSocket ws;
-    if (protocols.isEmpty) {
-      ws = web.WebSocket(uri.toString());
-    } else if (protocols.length == 1) {
-      ws = web.WebSocket(uri.toString(), protocols.first.toJS);
-    } else {
-      final jsProtos = protocols.map((p) => p.toJS).toList().toJS;
-      ws = web.WebSocket(uri.toString(), jsProtos);
-    }
-
+  /// Connect to [uri]. Protocols are intentionally omitted — the Cloudflare
+  /// Worker proxy accepts any plain WebSocket upgrade.
+  static Future<NativeWebSocket> connect(Uri uri) async {
+    final ws = web.WebSocket(uri.toString());
     final instance = NativeWebSocket._(ws);
     final readyCompleter = Completer<NativeWebSocket>();
 
@@ -35,8 +26,8 @@ class NativeWebSocket {
       if (!readyCompleter.isCompleted) readyCompleter.complete(instance);
     }.toJS);
 
-    ws.addEventListener('error', (web.Event _) {
-      final err = Exception('WebSocket failed to connect: $uri');
+    ws.addEventListener('error', (web.Event e) {
+      final err = Exception('WebSocket failed to connect to $uri');
       if (!readyCompleter.isCompleted) readyCompleter.completeError(err);
       if (!instance._doneCompleter.isCompleted) {
         instance._doneCompleter.completeError(err);
@@ -45,7 +36,6 @@ class NativeWebSocket {
 
     ws.addEventListener('message', (web.MessageEvent evt) {
       if (!instance._messageController.isClosed) {
-        // evt.data is a JSString for text frames
         final raw = evt.data;
         if (raw != null) {
           instance._messageController.add((raw as JSString).toDart);

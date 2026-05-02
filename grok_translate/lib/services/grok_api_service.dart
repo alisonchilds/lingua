@@ -150,10 +150,8 @@ class GrokApiService {
   }) async {
     _log.i('Web: connecting via proxy → $kProxyUrl');
     // Use native browser WebSocket (avoids web_socket_channel issues on web)
-    _nativeWs = await NativeWebSocket.connect(
-      Uri.parse(kProxyUrl),
-      protocols: ['realtime'],
-    );
+    // No subprotocol needed — the worker accepts any WS upgrade
+    _nativeWs = await NativeWebSocket.connect(Uri.parse(kProxyUrl));
 
     _nativeWsSub = _nativeWs!.stream.listen(
       _onMessage,

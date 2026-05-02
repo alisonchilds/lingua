@@ -3,8 +3,7 @@
 
 class NativeWebSocket {
   NativeWebSocket._();
-  static Future<NativeWebSocket> connect(Uri uri,
-      {List<String> protocols = const []}) {
+  static Future<NativeWebSocket> connect(Uri uri) {
     throw UnsupportedError('NativeWebSocket is web-only');
   }
 
