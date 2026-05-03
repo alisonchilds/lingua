@@ -298,7 +298,11 @@ class ConversationController extends StateNotifier<ConversationState> {
             (event.raw?['transcription'] as Map?)
                 ?.cast<String, dynamic>()['text'] as String? ??
             '';
-        if (rawText.isNotEmpty && !_translationInFlight) {
+        // In subtitles mode there is no audio playback so there is no echo
+        // risk — allow transcripts to accumulate even while a translation is
+        // in flight so that back-to-back phrases are not dropped.
+        final isSubtitlesMode = state.appMode == AppMode.subtitles;
+        if (rawText.isNotEmpty && (!_translationInFlight || isSubtitlesMode)) {
           _transcriptAccumulator
             ..write(_transcriptAccumulator.isNotEmpty ? ' ' : '')
             ..write(rawText.trim());
@@ -380,9 +384,15 @@ class ConversationController extends StateNotifier<ConversationState> {
         }
         _responseMessageAdded = false;
         _translationInFlight = false; // allow next utterance
-        // Clear any echo that arrived while translation was playing
-        _transcriptAccumulator.clear();
-        _transcriptDebounce?.cancel();
+
+        // In translator (voice) mode clear any mic echo that crept in while
+        // audio was playing back. In subtitles mode there is no playback, so
+        // we must NOT clear the accumulator — it may already contain the next
+        // phrase that arrived while the previous translation was in flight.
+        if (state.appMode != AppMode.subtitles) {
+          _transcriptAccumulator.clear();
+          _transcriptDebounce?.cancel();
+        }
         break;
 
       case GrokServerEventType.error:
