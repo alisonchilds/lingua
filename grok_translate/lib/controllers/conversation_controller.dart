@@ -293,9 +293,10 @@ class ConversationController extends StateNotifier<ConversationState> {
             (event.raw?['transcription'] as Map?)
                 ?.cast<String, dynamic>()['text'] as String? ??
             '';
-        if (rawText.isNotEmpty && state.appMode == AppMode.translator) {
-          // Translator mode only: accumulate then fire explicit translation.
-          // Subtitles mode skips this — Grok auto-responds via create_response.
+        if (rawText.isNotEmpty) {
+          // Both modes: accumulate transcript segments then fire one explicit
+          // translation command. This is the only reliable way to prevent the
+          // voice model responding as a conversational assistant.
           _transcriptAccumulator
             ..write(_transcriptAccumulator.isNotEmpty ? ' ' : '')
             ..write(rawText.trim());
@@ -311,13 +312,6 @@ class ConversationController extends StateNotifier<ConversationState> {
       case GrokServerEventType.responseCreated:
         _setStatus(ConversationStatus.translating);
         _responseMessageAdded = false;
-        // In subtitles mode prime the pending metadata so _addMessage labels correctly
-        if (state.appMode == AppMode.subtitles) {
-          final cfg = state.languageConfig ?? const LanguageConfig();
-          _pendingFrom = state.detectedLang1 ?? 'Auto';
-          _pendingTo = cfg.autoDetect ? 'English' : cfg.lang2Name;
-          _pendingSpeaker = Speaker.user1;
-        }
         break;
 
       case GrokServerEventType.responseAudioDelta:
@@ -427,14 +421,9 @@ class ConversationController extends StateNotifier<ConversationState> {
     final Speaker speaker;
 
     if (isSubtitles) {
-      // Subtitles mode: always translate whatever is spoken → lang2 (English by default).
-      // fromLang is the auto-detected spoken language; toLang is the target.
       fromLang = state.detectedLang1 ?? 'the detected language';
-      toLang = cfg.autoDetect
-          ? 'English'
-          : cfg.lang2Name;
+      toLang = cfg.autoDetect ? 'English' : cfg.lang2Name;
       speaker = Speaker.user1;
-      // No direction flip needed — subtitles always go one way.
     } else if (cfg.autoDetect) {
       final d1 = state.detectedLang1 ?? 'the detected language';
       final d2 = state.detectedLang2 ?? 'the other language';

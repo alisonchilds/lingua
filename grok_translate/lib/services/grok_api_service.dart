@@ -242,7 +242,6 @@ class GrokApiService {
     required LanguageConfig languageConfig,
     required VadSettings vadSettings,
   }) {
-    final isSubtitles = _appMode == AppMode.subtitles;
     final instructions = _buildSystemPrompt(languageConfig);
 
     _send({
@@ -260,14 +259,11 @@ class GrokApiService {
           'threshold': vadSettings.threshold,
           'prefix_padding_ms': 300,
           'silence_duration_ms': vadSettings.silenceDurationMs,
-          // Subtitles: auto-respond with text directly — simpler and more
-          // reliable than waiting for the transcription event.
-          // Translator: false — we inject an explicit translate command after
-          // receiving the transcript to prevent assistant-mode responses.
-          'create_response': isSubtitles,
+          // Both modes: false — we always intercept the transcript and inject
+          // an explicit translation command. This is the only reliable way to
+          // stop the voice model defaulting to assistant personality.
+          'create_response': false,
         },
-        // Subtitles mode: text output only, no audio
-        if (isSubtitles) 'modalities': ['text'],
       },
     });
   }
