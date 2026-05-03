@@ -5,6 +5,18 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/conversation_models.dart';
 
 /// Thin wrapper around SharedPreferences for persisting user settings.
+///
+/// ── Future: per-user defaults ────────────────────────────────────────────────
+/// TODO: When user accounts are added, migrate these preferences to a user
+/// profile stored server-side (e.g. Supabase / Firebase). Each user should
+/// be able to set:
+///   - defaultTargetLanguage  (e.g. "English") — used as the default "translate into"
+///     language in subtitles mode and as the pre-selected lang2 in translator mode.
+///   - defaultSourceLanguage  (e.g. "French") — pre-fill lang1 on setup.
+///   - preferredAppMode       (translator | subtitles) — open directly to their mode.
+///   - preferredVadSettings   (threshold, silenceDuration) — per-user VAD tuning.
+/// Until then, preferences are device-local via SharedPreferences.
+/// ─────────────────────────────────────────────────────────────────────────────
 class PreferencesService {
   static const _keyApiKey = 'grok_api_key';
   static const _keyLanguageConfig = 'language_config';
