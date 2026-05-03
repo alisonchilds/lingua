@@ -8,6 +8,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/conversation_models.dart';
 import '../models/grok_api_models.dart';
+// AppMode imported via conversation_models
 import 'ws_channel_stub.dart'
     if (dart.library.js_interop) 'ws_channel_web.dart';
 
@@ -72,14 +73,18 @@ class GrokApiService {
   // Public API
   // ---------------------------------------------------------------------------
 
+  AppMode _appMode = AppMode.translator;
+
   Future<void> connect({
     String? apiKey,
     required LanguageConfig languageConfig,
     required VadSettings vadSettings,
+    AppMode appMode = AppMode.translator,
   }) async {
     _apiKey = apiKey;
     _lastLangConfig = languageConfig;
     _lastVadSettings = vadSettings;
+    _appMode = appMode;
     await _connect(languageConfig: languageConfig, vadSettings: vadSettings);
   }
 
@@ -237,7 +242,9 @@ class GrokApiService {
     required LanguageConfig languageConfig,
     required VadSettings vadSettings,
   }) {
+    final isSubtitles = _appMode == AppMode.subtitles;
     final instructions = _buildSystemPrompt(languageConfig);
+
     _send({
       'type': 'session.update',
       'session': {
@@ -247,25 +254,36 @@ class GrokApiService {
           'input': {'format': {'type': 'audio/pcm', 'rate': 16000}},
           'output': {'format': {'type': 'audio/pcm', 'rate': 16000}},
         },
-        // Enable transcription so we get the spoken text + language code.
-        // We use this text to manually trigger a translation request rather
-        // than letting Grok auto-respond to raw audio (which makes it act
-        // as a conversational assistant instead of a translator).
         'input_audio_transcription': {'model': 'whisper-1'},
         'turn_detection': {
           'type': 'server_vad',
           'threshold': vadSettings.threshold,
           'prefix_padding_ms': 300,
           'silence_duration_ms': vadSettings.silenceDurationMs,
-          // IMPORTANT: false — we manually trigger response.create after
-          // receiving the transcript, so we can inject a translation command.
-          'create_response': false,
+          // Subtitles: auto-respond with text directly — simpler and more
+          // reliable than waiting for the transcription event.
+          // Translator: false — we inject an explicit translate command after
+          // receiving the transcript to prevent assistant-mode responses.
+          'create_response': isSubtitles,
         },
+        // Subtitles mode: text output only, no audio
+        if (isSubtitles) 'modalities': ['text'],
       },
     });
   }
 
   String _buildSystemPrompt(LanguageConfig cfg) {
+    if (_appMode == AppMode.subtitles) {
+      final targetLang =
+          cfg.autoDetect ? 'English' : cfg.lang2Name;
+      return 'You are a live subtitles translator. '
+          'The user will speak in any language. '
+          'Translate every utterance into $targetLang. '
+          'Output ONLY the translated text — no commentary, no explanations, no greetings. '
+          'If the speech is unclear or silent, output nothing.';
+    }
+
+    // Translator mode — strong anti-assistant instructions
     final String langLine;
     if (cfg.autoDetect) {
       langLine = 'Automatically detect which language is being spoken on each turn.';

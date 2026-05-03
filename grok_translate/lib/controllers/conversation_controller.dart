@@ -172,6 +172,7 @@ class ConversationController extends StateNotifier<ConversationState> {
       apiKey: key,
       languageConfig: langCfg,
       vadSettings: vadSettings,
+      appMode: state.appMode,
     );
 
     // Start mic
@@ -292,9 +293,9 @@ class ConversationController extends StateNotifier<ConversationState> {
             (event.raw?['transcription'] as Map?)
                 ?.cast<String, dynamic>()['text'] as String? ??
             '';
-        if (rawText.isNotEmpty) {
-          // Accumulate segments — a long utterance may produce multiple
-          // transcription events. Debounce 600ms then fire one translation.
+        if (rawText.isNotEmpty && state.appMode == AppMode.translator) {
+          // Translator mode only: accumulate then fire explicit translation.
+          // Subtitles mode skips this — Grok auto-responds via create_response.
           _transcriptAccumulator
             ..write(_transcriptAccumulator.isNotEmpty ? ' ' : '')
             ..write(rawText.trim());
@@ -309,6 +310,14 @@ class ConversationController extends StateNotifier<ConversationState> {
 
       case GrokServerEventType.responseCreated:
         _setStatus(ConversationStatus.translating);
+        _responseMessageAdded = false;
+        // In subtitles mode prime the pending metadata so _addMessage labels correctly
+        if (state.appMode == AppMode.subtitles) {
+          final cfg = state.languageConfig ?? const LanguageConfig();
+          _pendingFrom = state.detectedLang1 ?? 'Auto';
+          _pendingTo = cfg.autoDetect ? 'English' : cfg.lang2Name;
+          _pendingSpeaker = Speaker.user1;
+        }
         break;
 
       case GrokServerEventType.responseAudioDelta:
