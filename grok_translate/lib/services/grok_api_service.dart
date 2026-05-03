@@ -91,6 +91,46 @@ class GrokApiService {
   void requestResponse() => _send({'type': 'response.create'});
   void cancelResponse() => _send({'type': 'response.cancel'});
 
+  /// Inject the transcribed text as a user message and request a translation.
+  ///
+  /// This is the key to making Grok behave as a pure translator:
+  /// instead of letting Grok auto-respond to raw audio (which triggers its
+  /// assistant personality), we wait for the speech-to-text transcript,
+  /// then inject it as a text instruction: "Translate to [target]:\n[text]"
+  /// Grok responds to a clear text command far more reliably than to audio alone.
+  void requestTranslation({
+    required String transcript,
+    required String fromLanguage,
+    required String toLanguage,
+  }) {
+    // Clear any leftover audio buffer first
+    _send({'type': 'input_audio_buffer.clear'});
+
+    // Inject as a user text message with an explicit translate command
+    _send({
+      'type': 'conversation.item.create',
+      'item': {
+        'type': 'message',
+        'role': 'user',
+        'content': [
+          {
+            'type': 'input_text',
+            'text': 'Translate the following from $fromLanguage to $toLanguage. '
+                'Output ONLY the translated words, nothing else:\n\n$transcript',
+          }
+        ],
+      },
+    });
+
+    // Request spoken + text response
+    _send({
+      'type': 'response.create',
+      'response': {
+        'modalities': ['audio', 'text'],
+      },
+    });
+  }
+
   void updateSession({
     required LanguageConfig languageConfig,
     required VadSettings vadSettings,
@@ -209,14 +249,19 @@ class GrokApiService {
           'input': {'format': {'type': 'audio/pcm', 'rate': 16000}},
           'output': {'format': {'type': 'audio/pcm', 'rate': 16000}},
         },
-        // Request input transcription so we get language detection events
+        // Enable transcription so we get the spoken text + language code.
+        // We use this text to manually trigger a translation request rather
+        // than letting Grok auto-respond to raw audio (which makes it act
+        // as a conversational assistant instead of a translator).
         'input_audio_transcription': {'model': 'whisper-1'},
         'turn_detection': {
           'type': 'server_vad',
           'threshold': vadSettings.threshold,
           'prefix_padding_ms': 300,
           'silence_duration_ms': vadSettings.silenceDurationMs,
-          'create_response': true,
+          // IMPORTANT: false — we manually trigger response.create after
+          // receiving the transcript, so we can inject a translation command.
+          'create_response': false,
         },
       },
     });

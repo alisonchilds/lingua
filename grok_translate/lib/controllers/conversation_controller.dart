@@ -257,8 +257,22 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.inputAudioBufferSpeechStopped:
+        // VAD detected end of speech — wait for transcription before translating
         _setStatus(ConversationStatus.translating);
         _transcriptBuffer.clear();
+        break;
+
+      case GrokServerEventType.inputAudioTranscriptionCompleted:
+        // We now have the spoken text. Fire an explicit translation command.
+        // This is better than letting Grok auto-respond to raw audio.
+        if (event.detectedLanguage != null) {
+          _updateDetectedLanguage(event.detectedLanguage!);
+        }
+        final rawText = event.raw?['transcript'] as String? ??
+            event.raw?['transcription']?['text'] as String? ?? '';
+        if (rawText.isNotEmpty) {
+          _triggerTranslation(rawText);
+        }
         break;
 
       case GrokServerEventType.responseCreated:
@@ -333,12 +347,6 @@ class ConversationController extends StateNotifier<ConversationState> {
         _setError(event.errorMessage ?? 'Unknown API error');
         break;
 
-      case GrokServerEventType.inputAudioTranscriptionCompleted:
-        if (event.detectedLanguage != null) {
-          _updateDetectedLanguage(event.detectedLanguage!);
-        }
-        break;
-
       case GrokServerEventType.inputAudioBufferCommitted:
       case GrokServerEventType.unknown:
         break;
@@ -376,6 +384,46 @@ class ConversationController extends StateNotifier<ConversationState> {
     return last == Speaker.user1 ? Speaker.user2 : Speaker.user1;
   }
 
+  /// Called once we have a transcription — injects a text translation command.
+  void _triggerTranslation(String transcript) {
+    final cfg = state.languageConfig ?? const LanguageConfig();
+    String fromLang;
+    String toLang;
+
+    if (cfg.autoDetect) {
+      // Use detected languages if available, otherwise fallback labels
+      final d1 = state.detectedLang1 ?? 'Language A';
+      final d2 = state.detectedLang2 ?? 'Language B';
+      // Alternate: if last speaker was lang1, translate to lang2 and vice versa
+      final lastSpeaker = state.activeSpeaker;
+      if (lastSpeaker == Speaker.user2) {
+        fromLang = d2;
+        toLang = d1;
+      } else {
+        fromLang = d1;
+        toLang = d2;
+      }
+    } else {
+      // Explicit pair — detect which language was spoken by checking last
+      // detected language code against lang1Code
+      final lastDetected = state.detectedLang1;
+      if (lastDetected != null && lastDetected == cfg.lang2Name) {
+        fromLang = cfg.lang2Name;
+        toLang = cfg.lang1Name;
+      } else {
+        fromLang = cfg.lang1Name;
+        toLang = cfg.lang2Name;
+      }
+    }
+
+    _log.i('Translating from $fromLang → $toLang: "$transcript"');
+    _api.requestTranslation(
+      transcript: transcript,
+      fromLanguage: fromLang,
+      toLanguage: toLang,
+    );
+  }
+
   /// Map ISO-639-1 code → display name + flag using the supported languages list.
   void _updateDetectedLanguage(String isoCode) {
     final code = isoCode.toLowerCase().split('-').first; // 'en-US' → 'en'
@@ -389,12 +437,22 @@ class ConversationController extends StateNotifier<ConversationState> {
       state = state.copyWith(
         detectedLang1: match.name,
         detectedLang1Flag: match.flag,
+        activeSpeaker: Speaker.user1,
       );
-    } else if (state.detectedLang2 == null &&
-        match.name != state.detectedLang1) {
+    } else if (match.name == state.detectedLang1) {
+      state = state.copyWith(activeSpeaker: Speaker.user1);
+    } else if (state.detectedLang2 == null) {
       state = state.copyWith(
         detectedLang2: match.name,
         detectedLang2Flag: match.flag,
+        activeSpeaker: Speaker.user2,
+      );
+    } else {
+      // Both languages known — track which one is speaking
+      state = state.copyWith(
+        activeSpeaker: match.name == state.detectedLang2
+            ? Speaker.user2
+            : Speaker.user1,
       );
     }
   }
