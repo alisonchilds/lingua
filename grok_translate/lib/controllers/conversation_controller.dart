@@ -401,11 +401,14 @@ class ConversationController extends StateNotifier<ConversationState> {
     final from = _pendingFrom ?? (state.languageConfig?.lang1Name ?? 'Language 1');
     final to = _pendingTo ?? (state.languageConfig?.lang2Name ?? 'Language 2');
 
+    // Strip any framing tags the model may accidentally echo back.
+    final sanitized = _sanitizeTranslation(translatedText);
+
     final msg = TranslationMessage(
       id: _uuid.v4(),
       speaker: speaker,
       originalText: '',
-      translatedText: translatedText,
+      translatedText: sanitized,
       fromLanguage: from,
       toLanguage: to,
       timestamp: DateTime.now(),
@@ -431,9 +434,19 @@ class ConversationController extends StateNotifier<ConversationState> {
       toLang = cfg.autoDetect ? 'English' : cfg.lang2Name;
       speaker = Speaker.user1;
     } else if (cfg.autoDetect) {
+      // Use the speaker identity from language detection rather than a blind
+      // toggle. This correctly handles the case where the same person speaks
+      // twice in a row and avoids passing 'the other language' (a meaningless
+      // target) to the model when only one language has been identified yet.
+      final currentSpeaker = state.activeSpeaker ?? Speaker.user1;
       final d1 = state.detectedLang1 ?? 'the detected language';
-      final d2 = state.detectedLang2 ?? 'the other language';
-      if (_translateForward) {
+      // If the second language hasn't been detected yet, fall back to English
+      // (or French if the first language is already English). This gives the
+      // model a concrete, unambiguous target language.
+      final d2 = state.detectedLang2 ??
+          (d1.toLowerCase() == 'english' ? 'French' : 'English');
+
+      if (currentSpeaker == Speaker.user1) {
         fromLang = d1; toLang = d2; speaker = Speaker.user1;
       } else {
         fromLang = d2; toLang = d1; speaker = Speaker.user2;
@@ -444,10 +457,9 @@ class ConversationController extends StateNotifier<ConversationState> {
       } else {
         fromLang = cfg.lang2Name; toLang = cfg.lang1Name; speaker = Speaker.user2;
       }
+      // Flip direction for next utterance in fixed-language mode only
+      _translateForward = !_translateForward;
     }
-
-    // Flip direction for next utterance (translator mode only)
-    if (!isSubtitles) _translateForward = !_translateForward;
 
     _pendingFrom = fromLang;
     _pendingTo = toLang;
@@ -464,6 +476,19 @@ class ConversationController extends StateNotifier<ConversationState> {
       toLanguage: toLang,
       textOnly: textOnly,
     );
+  }
+
+  /// Remove framing tags that the model sometimes echoes back verbatim.
+  String _sanitizeTranslation(String text) {
+    // Remove [TEXT_TO_TRANSLATE ...] opening tags and [/TEXT_TO_TRANSLATE] closing tags
+    var cleaned = text.replaceAll(RegExp(r'\[TEXT_TO_TRANSLATE[^\]]*\]'), '');
+    cleaned = cleaned.replaceAll(RegExp(r'\[/TEXT_TO_TRANSLATE\]'), '');
+    // Strip any surrounding quotes the model may have preserved from the framing
+    cleaned = cleaned.trim();
+    if (cleaned.startsWith('"') && cleaned.endsWith('"') && cleaned.length >= 2) {
+      cleaned = cleaned.substring(1, cleaned.length - 1).trim();
+    }
+    return cleaned;
   }
 
   /// Map ISO-639-1 code → display name + flag using the supported languages list.
