@@ -113,7 +113,6 @@ class ConversationController extends StateNotifier<ConversationState> {
   final StringBuffer _transcriptAccumulator = StringBuffer();
 
   void _init() {
-    // Load persisted settings
     final langCfg = _prefs.getLanguageConfig();
     final vadSettings = _prefs.getVadSettings();
     final subtitles = _prefs.getSubtitlesEnabled();
@@ -412,12 +411,22 @@ class ConversationController extends StateNotifier<ConversationState> {
   /// Called once we have a full transcript — fires one translation request.
   void _triggerTranslation(String transcript) {
     final cfg = state.languageConfig ?? const LanguageConfig();
+    final isSubtitles = state.appMode == AppMode.subtitles;
 
     final String fromLang;
     final String toLang;
     final Speaker speaker;
 
-    if (cfg.autoDetect) {
+    if (isSubtitles) {
+      // Subtitles mode: always translate whatever is spoken → lang2 (English by default).
+      // fromLang is the auto-detected spoken language; toLang is the target.
+      fromLang = state.detectedLang1 ?? 'the detected language';
+      toLang = cfg.autoDetect
+          ? 'English'
+          : cfg.lang2Name;
+      speaker = Speaker.user1;
+      // No direction flip needed — subtitles always go one way.
+    } else if (cfg.autoDetect) {
       final d1 = state.detectedLang1 ?? 'the detected language';
       final d2 = state.detectedLang2 ?? 'the other language';
       if (_translateForward) {
@@ -433,8 +442,8 @@ class ConversationController extends StateNotifier<ConversationState> {
       }
     }
 
-    // Flip direction for next utterance
-    _translateForward = !_translateForward;
+    // Flip direction for next utterance (translator mode only)
+    if (!isSubtitles) _translateForward = !_translateForward;
 
     // Store for bubble labelling
     _pendingFrom = fromLang;

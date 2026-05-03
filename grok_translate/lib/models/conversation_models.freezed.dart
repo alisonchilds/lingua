@@ -323,9 +323,11 @@ LanguageConfig _$LanguageConfigFromJson(Map<String, dynamic> json) {
 /// @nodoc
 mixin _$LanguageConfig {
   String get lang1Code => throw _privateConstructorUsedError;
-  String get lang2Code => throw _privateConstructorUsedError;
+  String get lang2Code =>
+      throw _privateConstructorUsedError; // default target: English
   String get lang1Name => throw _privateConstructorUsedError;
-  String get lang2Name => throw _privateConstructorUsedError;
+  String get lang2Name =>
+      throw _privateConstructorUsedError; // default target: English
   bool get autoDetect => throw _privateConstructorUsedError;
 
   /// Serializes this LanguageConfig to a JSON map.
@@ -463,9 +465,9 @@ class __$$LanguageConfigImplCopyWithImpl<$Res>
 class _$LanguageConfigImpl implements _LanguageConfig {
   const _$LanguageConfigImpl(
       {this.lang1Code = 'auto',
-      this.lang2Code = 'auto',
+      this.lang2Code = 'en',
       this.lang1Name = 'Auto Detect',
-      this.lang2Name = 'Auto Detect',
+      this.lang2Name = 'English',
       this.autoDetect = true});
 
   factory _$LanguageConfigImpl.fromJson(Map<String, dynamic> json) =>
@@ -477,12 +479,14 @@ class _$LanguageConfigImpl implements _LanguageConfig {
   @override
   @JsonKey()
   final String lang2Code;
+// default target: English
   @override
   @JsonKey()
   final String lang1Name;
   @override
   @JsonKey()
   final String lang2Name;
+// default target: English
   @override
   @JsonKey()
   final bool autoDetect;
@@ -545,11 +549,11 @@ abstract class _LanguageConfig implements LanguageConfig {
   @override
   String get lang1Code;
   @override
-  String get lang2Code;
+  String get lang2Code; // default target: English
   @override
   String get lang1Name;
   @override
-  String get lang2Name;
+  String get lang2Name; // default target: English
   @override
   bool get autoDetect;
 
