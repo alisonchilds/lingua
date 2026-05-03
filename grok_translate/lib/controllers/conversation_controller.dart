@@ -283,6 +283,17 @@ class ConversationController extends StateNotifier<ConversationState> {
       case GrokServerEventType.inputAudioBufferSpeechStopped:
         _setStatus(ConversationStatus.translating);
         _transcriptBuffer.clear();
+        // Shorten the debounce window now that speech has definitively stopped.
+        // If we already have accumulated text, fire sooner (400ms) rather than
+        // waiting the full 1.2s — the transcription event(s) should arrive shortly.
+        if (_transcriptAccumulator.isNotEmpty) {
+          _transcriptDebounce?.cancel();
+          _transcriptDebounce = Timer(const Duration(milliseconds: 400), () {
+            final full = _transcriptAccumulator.toString().trim();
+            _transcriptAccumulator.clear();
+            if (full.isNotEmpty) _triggerTranslation(full);
+          });
+        }
         break;
 
       case GrokServerEventType.inputAudioTranscriptionCompleted:
@@ -294,14 +305,17 @@ class ConversationController extends StateNotifier<ConversationState> {
                 ?.cast<String, dynamic>()['text'] as String? ??
             '';
         if (rawText.isNotEmpty) {
-          // Both modes: accumulate transcript segments then fire one explicit
-          // translation command. This is the only reliable way to prevent the
-          // voice model responding as a conversational assistant.
+          // Accumulate transcript segments. Each natural pause in speech
+          // produces a separate transcription event — we collect them all
+          // and fire one translation after 1.2s of silence.
+          // The timer resets on every new segment so a long continuous
+          // speech never gets cut short.
           _transcriptAccumulator
             ..write(_transcriptAccumulator.isNotEmpty ? ' ' : '')
             ..write(rawText.trim());
           _transcriptDebounce?.cancel();
-          _transcriptDebounce = Timer(const Duration(milliseconds: 600), () {
+          _transcriptDebounce =
+              Timer(const Duration(milliseconds: 1200), () {
             final full = _transcriptAccumulator.toString().trim();
             _transcriptAccumulator.clear();
             if (full.isNotEmpty) _triggerTranslation(full);

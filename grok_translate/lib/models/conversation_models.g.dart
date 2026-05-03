@@ -59,7 +59,7 @@ Map<String, dynamic> _$$LanguageConfigImplToJson(
 _$VadSettingsImpl _$$VadSettingsImplFromJson(Map<String, dynamic> json) =>
     _$VadSettingsImpl(
       threshold: (json['threshold'] as num?)?.toDouble() ?? 0.6,
-      silenceDurationMs: (json['silenceDurationMs'] as num?)?.toInt() ?? 400,
+      silenceDurationMs: (json['silenceDurationMs'] as num?)?.toInt() ?? 700,
     );
 
 Map<String, dynamic> _$$VadSettingsImplToJson(_$VadSettingsImpl instance) =>

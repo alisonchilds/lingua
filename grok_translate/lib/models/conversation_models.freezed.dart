@@ -579,7 +579,8 @@ mixin _$ConversationState {
   String? get errorMessage => throw _privateConstructorUsedError;
   double get vadThreshold => throw _privateConstructorUsedError;
   int get vadSilenceDurationMs =>
-      throw _privateConstructorUsedError; // Detected languages — populated once the API identifies speech
+      throw _privateConstructorUsedError; // 700ms — less likely to cut mid-sentence
+// Detected languages — populated once the API identifies speech
   String? get detectedLang1 =>
       throw _privateConstructorUsedError; // e.g. "English"
   String? get detectedLang2 =>
@@ -880,7 +881,7 @@ class _$ConversationStateImpl implements _ConversationState {
       this.partialTranscript = '',
       this.errorMessage,
       this.vadThreshold = 0.6,
-      this.vadSilenceDurationMs = 400,
+      this.vadSilenceDurationMs = 700,
       this.detectedLang1,
       this.detectedLang2,
       this.detectedLang1Flag,
@@ -926,6 +927,7 @@ class _$ConversationStateImpl implements _ConversationState {
   @override
   @JsonKey()
   final int vadSilenceDurationMs;
+// 700ms — less likely to cut mid-sentence
 // Detected languages — populated once the API identifies speech
   @override
   final String? detectedLang1;
@@ -1051,7 +1053,8 @@ abstract class _ConversationState implements ConversationState {
   @override
   double get vadThreshold;
   @override
-  int get vadSilenceDurationMs; // Detected languages — populated once the API identifies speech
+  int get vadSilenceDurationMs; // 700ms — less likely to cut mid-sentence
+// Detected languages — populated once the API identifies speech
   @override
   String? get detectedLang1; // e.g. "English"
   @override
@@ -1171,7 +1174,7 @@ class __$$VadSettingsImplCopyWithImpl<$Res>
 /// @nodoc
 @JsonSerializable()
 class _$VadSettingsImpl implements _VadSettings {
-  const _$VadSettingsImpl({this.threshold = 0.6, this.silenceDurationMs = 400});
+  const _$VadSettingsImpl({this.threshold = 0.6, this.silenceDurationMs = 700});
 
   factory _$VadSettingsImpl.fromJson(Map<String, dynamic> json) =>
       _$$VadSettingsImplFromJson(json);

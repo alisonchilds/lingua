@@ -107,9 +107,11 @@ class GrokApiService {
     required String transcript,
     required String fromLanguage,
     required String toLanguage,
-    bool textOnly = false, // true in subtitles mode — no voice output
+    bool textOnly = false,
   }) {
-    _send({'type': 'input_audio_buffer.clear'});
+    // Cancel any response Grok may have auto-started (e.g. if a previous
+    // turn's audio was committed before we could stop it).
+    _send({'type': 'response.cancel'});
 
     _send({
       'type': 'conversation.item.create',
