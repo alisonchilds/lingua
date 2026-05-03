@@ -6,6 +6,14 @@ part 'conversation_models.g.dart';
 /// Which "side" of the conversation spoke / is speaking.
 enum Speaker { user1, user2 }
 
+/// App operating mode.
+enum AppMode {
+  /// Two-person voice translator — mic in, translated voice out.
+  translator,
+  /// Live subtitles — mic in, translated text displayed, no voice output.
+  subtitles,
+}
+
 /// Visual state of the translation pipeline.
 enum ConversationStatus {
   idle,
@@ -57,6 +65,7 @@ class ConversationState with _$ConversationState {
     LanguageConfig? languageConfig,
     Speaker? activeSpeaker,
     @Default(true) bool subtitlesEnabled,
+    @Default(AppMode.translator) AppMode appMode,
     @Default(false) bool isConnected,
     @Default(false) bool isSessionActive,
     @Default('') String partialTranscript,

@@ -1,14 +1,16 @@
 import 'package:go_router/go_router.dart';
 
-import '../screens/language_setup_screen.dart';
 import '../screens/conversation_screen.dart';
+import '../screens/language_setup_screen.dart';
 import '../screens/settings_screen.dart';
+import '../screens/subtitles_screen.dart';
 
 class AppRouter {
   AppRouter._();
 
   static const pathSetup = '/';
   static const pathConversation = '/conversation';
+  static const pathSubtitles = '/subtitles';
   static const pathSettings = '/settings';
 
   static final router = GoRouter(
@@ -21,6 +23,10 @@ class AppRouter {
       GoRoute(
         path: pathConversation,
         builder: (context, state) => const ConversationScreen(),
+      ),
+      GoRoute(
+        path: pathSubtitles,
+        builder: (context, state) => const SubtitlesScreen(),
       ),
       GoRoute(
         path: pathSettings,

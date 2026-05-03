@@ -77,6 +77,8 @@ enum GrokServerEventType {
   responseAudioDone,
   responseAudioTranscriptDelta,
   responseAudioTranscriptDone,
+  responseTextDelta,   // text-only mode: streamed text output
+  responseTextDone,    // text-only mode: final text output
   responseDone,
   error,
   unknown,
@@ -106,9 +108,13 @@ GrokServerEventType grokEventTypeFromString(String type) {
         GrokServerEventType.responseAudioTranscriptDelta,
     'response.output_audio_transcript.done':
         GrokServerEventType.responseAudioTranscriptDone,
-    // Input audio transcription completed — carries transcript + language code
     'conversation.item.input_audio_transcription.completed':
         GrokServerEventType.inputAudioTranscriptionCompleted,
+    // Text-only output (subtitles mode)
+    'response.output_text.delta': GrokServerEventType.responseTextDelta,
+    'response.output_text.done': GrokServerEventType.responseTextDone,
+    'response.text.delta': GrokServerEventType.responseTextDelta,
+    'response.text.done': GrokServerEventType.responseTextDone,
     'response.done': GrokServerEventType.responseDone,
     'error': GrokServerEventType.error,
   }[type] ??

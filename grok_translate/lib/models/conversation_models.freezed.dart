@@ -568,6 +568,7 @@ mixin _$ConversationState {
   LanguageConfig? get languageConfig => throw _privateConstructorUsedError;
   Speaker? get activeSpeaker => throw _privateConstructorUsedError;
   bool get subtitlesEnabled => throw _privateConstructorUsedError;
+  AppMode get appMode => throw _privateConstructorUsedError;
   bool get isConnected => throw _privateConstructorUsedError;
   bool get isSessionActive => throw _privateConstructorUsedError;
   String get partialTranscript => throw _privateConstructorUsedError;
@@ -601,6 +602,7 @@ abstract class $ConversationStateCopyWith<$Res> {
       LanguageConfig? languageConfig,
       Speaker? activeSpeaker,
       bool subtitlesEnabled,
+      AppMode appMode,
       bool isConnected,
       bool isSessionActive,
       String partialTranscript,
@@ -635,6 +637,7 @@ class _$ConversationStateCopyWithImpl<$Res, $Val extends ConversationState>
     Object? languageConfig = freezed,
     Object? activeSpeaker = freezed,
     Object? subtitlesEnabled = null,
+    Object? appMode = null,
     Object? isConnected = null,
     Object? isSessionActive = null,
     Object? partialTranscript = null,
@@ -667,6 +670,10 @@ class _$ConversationStateCopyWithImpl<$Res, $Val extends ConversationState>
           ? _value.subtitlesEnabled
           : subtitlesEnabled // ignore: cast_nullable_to_non_nullable
               as bool,
+      appMode: null == appMode
+          ? _value.appMode
+          : appMode // ignore: cast_nullable_to_non_nullable
+              as AppMode,
       isConnected: null == isConnected
           ? _value.isConnected
           : isConnected // ignore: cast_nullable_to_non_nullable
@@ -739,6 +746,7 @@ abstract class _$$ConversationStateImplCopyWith<$Res>
       LanguageConfig? languageConfig,
       Speaker? activeSpeaker,
       bool subtitlesEnabled,
+      AppMode appMode,
       bool isConnected,
       bool isSessionActive,
       String partialTranscript,
@@ -772,6 +780,7 @@ class __$$ConversationStateImplCopyWithImpl<$Res>
     Object? languageConfig = freezed,
     Object? activeSpeaker = freezed,
     Object? subtitlesEnabled = null,
+    Object? appMode = null,
     Object? isConnected = null,
     Object? isSessionActive = null,
     Object? partialTranscript = null,
@@ -804,6 +813,10 @@ class __$$ConversationStateImplCopyWithImpl<$Res>
           ? _value.subtitlesEnabled
           : subtitlesEnabled // ignore: cast_nullable_to_non_nullable
               as bool,
+      appMode: null == appMode
+          ? _value.appMode
+          : appMode // ignore: cast_nullable_to_non_nullable
+              as AppMode,
       isConnected: null == isConnected
           ? _value.isConnected
           : isConnected // ignore: cast_nullable_to_non_nullable
@@ -857,6 +870,7 @@ class _$ConversationStateImpl implements _ConversationState {
       this.languageConfig,
       this.activeSpeaker,
       this.subtitlesEnabled = true,
+      this.appMode = AppMode.translator,
       this.isConnected = false,
       this.isSessionActive = false,
       this.partialTranscript = '',
@@ -890,6 +904,9 @@ class _$ConversationStateImpl implements _ConversationState {
   final bool subtitlesEnabled;
   @override
   @JsonKey()
+  final AppMode appMode;
+  @override
+  @JsonKey()
   final bool isConnected;
   @override
   @JsonKey()
@@ -919,7 +936,7 @@ class _$ConversationStateImpl implements _ConversationState {
 
   @override
   String toString() {
-    return 'ConversationState(status: $status, messages: $messages, languageConfig: $languageConfig, activeSpeaker: $activeSpeaker, subtitlesEnabled: $subtitlesEnabled, isConnected: $isConnected, isSessionActive: $isSessionActive, partialTranscript: $partialTranscript, errorMessage: $errorMessage, vadThreshold: $vadThreshold, vadSilenceDurationMs: $vadSilenceDurationMs, detectedLang1: $detectedLang1, detectedLang2: $detectedLang2, detectedLang1Flag: $detectedLang1Flag, detectedLang2Flag: $detectedLang2Flag)';
+    return 'ConversationState(status: $status, messages: $messages, languageConfig: $languageConfig, activeSpeaker: $activeSpeaker, subtitlesEnabled: $subtitlesEnabled, appMode: $appMode, isConnected: $isConnected, isSessionActive: $isSessionActive, partialTranscript: $partialTranscript, errorMessage: $errorMessage, vadThreshold: $vadThreshold, vadSilenceDurationMs: $vadSilenceDurationMs, detectedLang1: $detectedLang1, detectedLang2: $detectedLang2, detectedLang1Flag: $detectedLang1Flag, detectedLang2Flag: $detectedLang2Flag)';
   }
 
   @override
@@ -935,6 +952,7 @@ class _$ConversationStateImpl implements _ConversationState {
                 other.activeSpeaker == activeSpeaker) &&
             (identical(other.subtitlesEnabled, subtitlesEnabled) ||
                 other.subtitlesEnabled == subtitlesEnabled) &&
+            (identical(other.appMode, appMode) || other.appMode == appMode) &&
             (identical(other.isConnected, isConnected) ||
                 other.isConnected == isConnected) &&
             (identical(other.isSessionActive, isSessionActive) ||
@@ -965,6 +983,7 @@ class _$ConversationStateImpl implements _ConversationState {
       languageConfig,
       activeSpeaker,
       subtitlesEnabled,
+      appMode,
       isConnected,
       isSessionActive,
       partialTranscript,
@@ -993,6 +1012,7 @@ abstract class _ConversationState implements ConversationState {
       final LanguageConfig? languageConfig,
       final Speaker? activeSpeaker,
       final bool subtitlesEnabled,
+      final AppMode appMode,
       final bool isConnected,
       final bool isSessionActive,
       final String partialTranscript,
@@ -1014,6 +1034,8 @@ abstract class _ConversationState implements ConversationState {
   Speaker? get activeSpeaker;
   @override
   bool get subtitlesEnabled;
+  @override
+  AppMode get appMode;
   @override
   bool get isConnected;
   @override

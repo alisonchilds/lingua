@@ -214,6 +214,11 @@ class ConversationController extends StateNotifier<ConversationState> {
     _log.i('Session ended.');
   }
 
+  /// Switch between translator and subtitles mode.
+  void setAppMode(AppMode mode) {
+    state = state.copyWith(appMode: mode);
+  }
+
   /// Update language config (persisted).
   Future<void> setLanguageConfig(LanguageConfig cfg) async {
     state = state.copyWith(languageConfig: cfg);
@@ -341,6 +346,26 @@ class ConversationController extends StateNotifier<ConversationState> {
         _transcriptBuffer.clear();
         break;
 
+      // Text-only mode (subtitles): stream translated text directly
+      case GrokServerEventType.responseTextDelta:
+        if (event.transcriptDelta != null) {
+          _transcriptBuffer.write(event.transcriptDelta);
+          state = state.copyWith(
+              partialTranscript: _transcriptBuffer.toString());
+        }
+        break;
+
+      case GrokServerEventType.responseTextDone:
+        final textDone =
+            event.transcriptText ?? _transcriptBuffer.toString();
+        if (textDone.isNotEmpty && !_responseMessageAdded) {
+          _responseMessageAdded = true;
+          _addMessage(textDone);
+        }
+        state = state.copyWith(partialTranscript: '');
+        _transcriptBuffer.clear();
+        break;
+
       case GrokServerEventType.responseDone:
         // Fallback only if responseAudioTranscriptDone never fired
         if (!_responseMessageAdded && _transcriptBuffer.isNotEmpty) {
@@ -417,12 +442,14 @@ class ConversationController extends StateNotifier<ConversationState> {
     _pendingSpeaker = speaker;
     _responseMessageAdded = false;
 
-    _log.i('[$fromLang → $toLang] "$transcript"');
+    final textOnly = state.appMode == AppMode.subtitles;
+    _log.i('[${textOnly ? "text" : "voice"} $fromLang → $toLang] "$transcript"');
 
     _api.requestTranslation(
       transcript: transcript,
       fromLanguage: fromLang,
       toLanguage: toLang,
+      textOnly: textOnly,
     );
   }
 

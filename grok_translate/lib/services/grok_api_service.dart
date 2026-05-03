@@ -102,11 +102,10 @@ class GrokApiService {
     required String transcript,
     required String fromLanguage,
     required String toLanguage,
+    bool textOnly = false, // true in subtitles mode — no voice output
   }) {
-    // Clear any leftover audio buffer first
     _send({'type': 'input_audio_buffer.clear'});
 
-    // Inject as a user text message with an explicit translate command
     _send({
       'type': 'conversation.item.create',
       'item': {
@@ -122,11 +121,10 @@ class GrokApiService {
       },
     });
 
-    // Request spoken + text response
     _send({
       'type': 'response.create',
       'response': {
-        'modalities': ['audio', 'text'],
+        'modalities': textOnly ? ['text'] : ['audio', 'text'],
       },
     });
   }
@@ -346,13 +344,16 @@ You are a translation machine, not an assistant. Respond only with the translate
             : null,
         transcriptDelta: (eventType ==
                     GrokServerEventType.responseAudioTranscriptDelta ||
-                eventType == GrokServerEventType.responseAudioTranscriptDone)
+                eventType == GrokServerEventType.responseAudioTranscriptDone ||
+                eventType == GrokServerEventType.responseTextDelta ||
+                eventType == GrokServerEventType.responseTextDone)
             ? json['delta'] as String?
             : null,
-        transcriptText:
-            (eventType == GrokServerEventType.responseAudioTranscriptDone)
-                ? json['transcript'] as String?
-                : null,
+        transcriptText: (eventType ==
+                    GrokServerEventType.responseAudioTranscriptDone ||
+                eventType == GrokServerEventType.responseTextDone)
+            ? (json['text'] as String? ?? json['transcript'] as String?)
+            : null,
         detectedLanguage: detectedLanguage,
         errorMessage: (eventType == GrokServerEventType.error)
             ? (json['error'] as Map?)?.cast<String, dynamic>()['message']
