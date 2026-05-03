@@ -7,7 +7,6 @@ import 'package:go_router/go_router.dart';
 import '../controllers/conversation_controller.dart';
 import '../models/conversation_models.dart';
 import '../router/app_router.dart';
-import '../services/grok_api_service.dart';
 import '../widgets/api_key_dialog.dart';
 import '../widgets/language_selector.dart';
 
@@ -110,16 +109,13 @@ class _LanguageSetupScreenState extends ConsumerState<LanguageSetupScreen> {
               ).animate().fadeIn(duration: 400.ms, delay: 80.ms),
               const SizedBox(height: 24),
 
-              // ── API key / proxy badge ──────────────────────────────────
-              if (_keyRequired)
+              // ── API key badge (native only) ────────────────────────────
+              if (_keyRequired) ...[
                 _ApiKeyBadge(hasKey: _hasApiKey, onTap: _promptApiKey)
                     .animate()
-                    .fadeIn(duration: 400.ms, delay: 120.ms)
-              else
-                _ProxyBadge()
-                    .animate()
                     .fadeIn(duration: 400.ms, delay: 120.ms),
-              const SizedBox(height: 24),
+                const SizedBox(height: 24),
+              ],
 
               // ── Auto-detect toggle ─────────────────────────────────────
               Card(
@@ -358,44 +354,6 @@ class _HeroSection extends StatelessWidget {
                 ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             textAlign: TextAlign.center),
       ],
-    );
-  }
-}
-
-class _ProxyBadge extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final host = Uri.parse(GrokApiService.kProxyUrl).host;
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.green.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.green.withValues(alpha: 0.4)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.shield_outlined, color: Colors.green, size: 20),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Secure proxy active',
-                    style: TextStyle(
-                        color: Colors.green,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14)),
-                Text(host,
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.outline)),
-              ],
-            ),
-          ),
-          const Icon(Icons.check_circle_outline, size: 18, color: Colors.green),
-        ],
-      ),
     );
   }
 }
