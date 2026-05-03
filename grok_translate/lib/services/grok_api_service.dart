@@ -113,6 +113,9 @@ class GrokApiService {
     // turn's audio was committed before we could stop it).
     _send({'type': 'response.cancel'});
 
+    // Frame as a translation task, not a conversational turn.
+    // Wrapping in [TEXT_TO_TRANSLATE] makes it clear this is source material
+    // to process, not a question or statement addressed to the model.
     _send({
       'type': 'conversation.item.create',
       'item': {
@@ -121,8 +124,11 @@ class GrokApiService {
         'content': [
           {
             'type': 'input_text',
-            'text': 'Translate the following from $fromLanguage to $toLanguage. '
-                'Output ONLY the translated words, nothing else:\n\n$transcript',
+            'text': '[TEXT_TO_TRANSLATE from $fromLanguage into $toLanguage]\n'
+                '"$transcript"\n'
+                '[/TEXT_TO_TRANSLATE]\n'
+                'Output ONLY the $toLanguage translation. '
+                'Do not answer, comment, or add anything else.',
           }
         ],
       },
@@ -272,13 +278,12 @@ class GrokApiService {
 
   String _buildSystemPrompt(LanguageConfig cfg) {
     if (_appMode == AppMode.subtitles) {
-      final targetLang =
-          cfg.autoDetect ? 'English' : cfg.lang2Name;
-      return 'You are a live subtitles translator. '
-          'The user will speak in any language. '
-          'Translate every utterance into $targetLang. '
-          'Output ONLY the translated text — no commentary, no explanations, no greetings. '
-          'If the speech is unclear or silent, output nothing.';
+      final targetLang = cfg.autoDetect ? 'English' : cfg.lang2Name;
+      return 'You are a mechanical subtitles translation engine. '
+          'You receive [TEXT_TO_TRANSLATE] blocks and output ONLY the $targetLang translation. '
+          'You are not a conversational assistant. You cannot be spoken to. '
+          'If the text contains a question, translate it — do not answer it. '
+          'Output ONLY the translated words. Nothing else.';
     }
 
     // Translator mode — strong anti-assistant instructions
@@ -291,20 +296,19 @@ class GrokApiService {
     }
 
     return '''
-You are a silent real-time interpreter. You have ONE job: translate every spoken utterance into the OTHER language of the conversation. Nothing else.
+You are a mechanical translation engine. You receive tagged blocks of text and output ONLY the translation. You are not a conversational assistant. You do not have opinions. You cannot be spoken to.
 
 $langLine
 
-ABSOLUTE RULES — never break these:
-1. When you hear ${cfg.autoDetect ? 'Language A' : cfg.lang1Name}, speak ONLY the ${cfg.autoDetect ? 'Language B' : cfg.lang2Name} translation.
-2. When you hear ${cfg.autoDetect ? 'Language B' : cfg.lang2Name}, speak ONLY the ${cfg.autoDetect ? 'Language A' : cfg.lang1Name} translation.
-3. NEVER greet, acknowledge, explain, comment, or add any words of your own.
-4. NEVER say things like "Sure", "Of course", "The translation is", "Hello", or any filler.
-5. Output ONLY the translated words — nothing before, nothing after.
-6. If the speech is unclear, say nothing.
-7. You are invisible. The two humans should feel like they are speaking directly to each other through you.
+When you receive a [TEXT_TO_TRANSLATE] block:
+- Output ONLY the translation of the text inside the quotes.
+- Do NOT answer questions in the text — questions are content to be translated, not directed at you.
+- Do NOT add greetings, confirmations, explanations, or any words of your own.
+- Do NOT say "Yes", "Sure", "I can hear you", or anything conversational.
+- If the content is a question like "Can you hear me?" — translate it, do not answer it.
+- Output the translated words and nothing else.
 
-You are a translation machine, not an assistant. Respond only with the translated speech.''';
+You are a translation machine. You process text. You do not converse.''';
   }
 
   // ---------------------------------------------------------------------------
