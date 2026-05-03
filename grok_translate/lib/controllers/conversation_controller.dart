@@ -93,6 +93,25 @@ class ConversationController extends StateNotifier<ConversationState> {
   // Accumulate transcript deltas for the current utterance
   final StringBuffer _transcriptBuffer = StringBuffer();
 
+  // Translation direction — flips after each utterance for natural alternation.
+  // true = lang1→lang2 (e.g. English→French), false = lang2→lang1
+  bool _translateForward = true;
+
+  // Stores the from/to/speaker for the in-flight translation so _addMessage
+  // can label the bubble correctly without guessing.
+  String? _pendingFrom;
+  String? _pendingTo;
+  Speaker? _pendingSpeaker;
+
+  // Prevents duplicate bubbles when both responseAudioTranscriptDone and
+  // responseDone try to add the same message.
+  bool _responseMessageAdded = false;
+
+  // Debounce timer: accumulates transcript segments from a long utterance
+  // before firing a single translation request.
+  Timer? _transcriptDebounce;
+  final StringBuffer _transcriptAccumulator = StringBuffer();
+
   void _init() {
     // Load persisted settings
     final langCfg = _prefs.getLanguageConfig();
@@ -257,21 +276,30 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.inputAudioBufferSpeechStopped:
-        // VAD detected end of speech — wait for transcription before translating
         _setStatus(ConversationStatus.translating);
         _transcriptBuffer.clear();
         break;
 
       case GrokServerEventType.inputAudioTranscriptionCompleted:
-        // We now have the spoken text. Fire an explicit translation command.
-        // This is better than letting Grok auto-respond to raw audio.
         if (event.detectedLanguage != null) {
           _updateDetectedLanguage(event.detectedLanguage!);
         }
         final rawText = event.raw?['transcript'] as String? ??
-            event.raw?['transcription']?['text'] as String? ?? '';
+            (event.raw?['transcription'] as Map?)
+                ?.cast<String, dynamic>()['text'] as String? ??
+            '';
         if (rawText.isNotEmpty) {
-          _triggerTranslation(rawText);
+          // Accumulate segments — a long utterance may produce multiple
+          // transcription events. Debounce 600ms then fire one translation.
+          _transcriptAccumulator
+            ..write(_transcriptAccumulator.isNotEmpty ? ' ' : '')
+            ..write(rawText.trim());
+          _transcriptDebounce?.cancel();
+          _transcriptDebounce = Timer(const Duration(milliseconds: 600), () {
+            final full = _transcriptAccumulator.toString().trim();
+            _transcriptAccumulator.clear();
+            if (full.isNotEmpty) _triggerTranslation(full);
+          });
         }
         break;
 
@@ -304,43 +332,24 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.responseAudioTranscriptDone:
-        final transcriptText =
-            event.transcriptText ?? _transcriptBuffer.toString();
-        if (transcriptText.isNotEmpty) {
-          _addMessage(transcriptText);
+        final text = event.transcriptText ?? _transcriptBuffer.toString();
+        if (text.isNotEmpty && !_responseMessageAdded) {
+          _responseMessageAdded = true;
+          _addMessage(text);
         }
         state = state.copyWith(partialTranscript: '');
         _transcriptBuffer.clear();
         break;
 
       case GrokServerEventType.responseDone:
-        // Fallback: extract transcript from response.done output array
-        // in case response.audio_transcript.done was not sent.
-        if (_transcriptBuffer.isNotEmpty) {
+        // Fallback only if responseAudioTranscriptDone never fired
+        if (!_responseMessageAdded && _transcriptBuffer.isNotEmpty) {
+          _responseMessageAdded = true;
           _addMessage(_transcriptBuffer.toString());
           _transcriptBuffer.clear();
           state = state.copyWith(partialTranscript: '');
-        } else {
-          // Try to pull text from the raw event's output array
-          final raw = event.raw;
-          if (raw != null) {
-            final response = raw['response'] as Map?;
-            final output = response?['output'] as List?;
-            if (output != null) {
-              for (final item in output) {
-                final content = ((item as Map?)?.cast<String, dynamic>())?['content'] as List?;
-                if (content != null) {
-                  for (final part in content) {
-                    final transcript = ((part as Map?)?.cast<String, dynamic>())?['transcript'] as String?;
-                    if (transcript != null && transcript.isNotEmpty) {
-                      _addMessage(transcript);
-                    }
-                  }
-                }
-              }
-            }
-          }
         }
+        _responseMessageAdded = false; // reset for next turn
         break;
 
       case GrokServerEventType.error:
@@ -354,19 +363,18 @@ class ConversationController extends StateNotifier<ConversationState> {
   }
 
   void _addMessage(String translatedText) {
-    // Determine speaker based on language detection heuristic.
-    // In a real app this would use the detected language from the transcript.
-    // For MVP we alternate or use a simple last-speaker tracker.
-    final speaker = _inferSpeaker();
-    final langCfg = state.languageConfig ?? const LanguageConfig();
+    // Use the speaker/language that _triggerTranslation set before this response
+    final speaker = _pendingSpeaker ?? Speaker.user1;
+    final from = _pendingFrom ?? (state.languageConfig?.lang1Name ?? 'Language 1');
+    final to = _pendingTo ?? (state.languageConfig?.lang2Name ?? 'Language 2');
 
     final msg = TranslationMessage(
       id: _uuid.v4(),
       speaker: speaker,
       originalText: '',
       translatedText: translatedText,
-      fromLanguage: langCfg.lang1Name,
-      toLanguage: langCfg.lang2Name,
+      fromLanguage: from,
+      toLanguage: to,
       timestamp: DateTime.now(),
     );
 
@@ -376,47 +384,41 @@ class ConversationController extends StateNotifier<ConversationState> {
     );
   }
 
-  Speaker _inferSpeaker() {
-    // Simple heuristic: alternate between speakers for MVP.
-    // A production version would use the detected language code from the API.
-    if (state.messages.isEmpty) return Speaker.user1;
-    final last = state.messages.last.speaker;
-    return last == Speaker.user1 ? Speaker.user2 : Speaker.user1;
-  }
-
-  /// Called once we have a transcription — injects a text translation command.
+  /// Called once we have a full transcript — fires one translation request.
   void _triggerTranslation(String transcript) {
     final cfg = state.languageConfig ?? const LanguageConfig();
-    String fromLang;
-    String toLang;
+
+    final String fromLang;
+    final String toLang;
+    final Speaker speaker;
 
     if (cfg.autoDetect) {
-      // Use detected languages if available, otherwise fallback labels
-      final d1 = state.detectedLang1 ?? 'Language A';
-      final d2 = state.detectedLang2 ?? 'Language B';
-      // Alternate: if last speaker was lang1, translate to lang2 and vice versa
-      final lastSpeaker = state.activeSpeaker;
-      if (lastSpeaker == Speaker.user2) {
-        fromLang = d2;
-        toLang = d1;
+      final d1 = state.detectedLang1 ?? 'the detected language';
+      final d2 = state.detectedLang2 ?? 'the other language';
+      if (_translateForward) {
+        fromLang = d1; toLang = d2; speaker = Speaker.user1;
       } else {
-        fromLang = d1;
-        toLang = d2;
+        fromLang = d2; toLang = d1; speaker = Speaker.user2;
       }
     } else {
-      // Explicit pair — detect which language was spoken by checking last
-      // detected language code against lang1Code
-      final lastDetected = state.detectedLang1;
-      if (lastDetected != null && lastDetected == cfg.lang2Name) {
-        fromLang = cfg.lang2Name;
-        toLang = cfg.lang1Name;
+      if (_translateForward) {
+        fromLang = cfg.lang1Name; toLang = cfg.lang2Name; speaker = Speaker.user1;
       } else {
-        fromLang = cfg.lang1Name;
-        toLang = cfg.lang2Name;
+        fromLang = cfg.lang2Name; toLang = cfg.lang1Name; speaker = Speaker.user2;
       }
     }
 
-    _log.i('Translating from $fromLang → $toLang: "$transcript"');
+    // Flip direction for next utterance
+    _translateForward = !_translateForward;
+
+    // Store for bubble labelling
+    _pendingFrom = fromLang;
+    _pendingTo = toLang;
+    _pendingSpeaker = speaker;
+    _responseMessageAdded = false;
+
+    _log.i('[$fromLang → $toLang] "$transcript"');
+
     _api.requestTranslation(
       transcript: transcript,
       fromLanguage: fromLang,
@@ -476,6 +478,7 @@ class ConversationController extends StateNotifier<ConversationState> {
 
   @override
   void dispose() {
+    _transcriptDebounce?.cancel();
     _apiEventSub?.cancel();
     _micSub?.cancel();
     _connectionSub?.cancel();
