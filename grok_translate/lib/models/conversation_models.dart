@@ -77,6 +77,10 @@ class ConversationState with _$ConversationState {
     String? detectedLang2,   // e.g. "French"
     String? detectedLang1Flag,
     String? detectedLang2Flag,
+    // When set, overrides automatic language detection for speaker assignment.
+    // The user taps a "Switch Speaker" button to tell the app that the other
+    // person is now speaking.
+    @Default(false) bool speakerOverrideActive,
   }) = _ConversationState;
 }
 

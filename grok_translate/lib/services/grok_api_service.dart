@@ -96,48 +96,43 @@ class GrokApiService {
   void requestResponse() => _send({'type': 'response.create'});
   void cancelResponse() => _send({'type': 'response.cancel'});
 
-  /// Inject the transcribed text as a user message and request a translation.
+  /// Inject the transcribed text directly into response.create as a stateless
+  /// translation request.
   ///
-  /// This is the key to making Grok behave as a pure translator:
-  /// instead of letting Grok auto-respond to raw audio (which triggers its
-  /// assistant personality), we wait for the speech-to-text transcript,
-  /// then inject it as a text instruction: "Translate to [target]:\n[text]"
-  /// Grok responds to a clear text command far more reliably than to audio alone.
+  /// Using `input` + `instructions` on `response.create` (rather than
+  /// `conversation.item.create`) keeps each translation fully independent from
+  /// the persistent conversation history.  This prevents the model from drifting
+  /// into "assistant" mode as the history grows, and eliminates doubled output
+  /// caused by stale history items.
   void requestTranslation({
     required String transcript,
     required String fromLanguage,
     required String toLanguage,
     bool textOnly = false,
   }) {
-    // Cancel any response Grok may have auto-started (e.g. if a previous
-    // turn's audio was committed before we could stop it).
+    // Cancel any response Grok may have auto-started.
     _send({'type': 'response.cancel'});
-
-    // Frame as a translation task, not a conversational turn.
-    // Wrapping in [TEXT_TO_TRANSLATE] makes it clear this is source material
-    // to process, not a question or statement addressed to the model.
-    _send({
-      'type': 'conversation.item.create',
-      'item': {
-        'type': 'message',
-        'role': 'user',
-        'content': [
-          {
-            'type': 'input_text',
-            'text': '[TEXT_TO_TRANSLATE from $fromLanguage into $toLanguage]\n'
-                '"$transcript"\n'
-                '[/TEXT_TO_TRANSLATE]\n'
-                'Output ONLY the $toLanguage translation. '
-                'Do not answer, comment, or add anything else.',
-          }
-        ],
-      },
-    });
 
     _send({
       'type': 'response.create',
       'response': {
         'modalities': textOnly ? ['text'] : ['audio', 'text'],
+        // Per-response instruction override — takes precedence over the session
+        // system prompt and gives the model an explicit, unambiguous directive.
+        'instructions': 'Translate the following text from $fromLanguage into '
+            '$toLanguage. Output ONLY the $toLanguage translation. '
+            'Do not greet, explain, or add any words of your own.',
+        // Provide the transcript as a standalone input item rather than via
+        // conversation.item.create so it does not accumulate in history.
+        'input': [
+          {
+            'type': 'message',
+            'role': 'user',
+            'content': [
+              {'type': 'input_text', 'text': transcript},
+            ],
+          }
+        ],
       },
     });
   }
@@ -277,38 +272,18 @@ class GrokApiService {
   }
 
   String _buildSystemPrompt(LanguageConfig cfg) {
+    // Each response.create carries its own per-response `instructions` with the
+    // exact source/target language pair.  The session-level system prompt acts
+    // purely as a backstop persona so the model never defaults to an assistant.
     if (_appMode == AppMode.subtitles) {
-      final targetLang = cfg.autoDetect ? 'English' : cfg.lang2Name;
-      return 'You are a mechanical subtitles translation engine. '
-          'You receive [TEXT_TO_TRANSLATE] blocks and output ONLY the $targetLang translation. '
-          'You are not a conversational assistant. You cannot be spoken to. '
-          'If the text contains a question, translate it — do not answer it. '
-          'Output ONLY the translated words. Nothing else.';
+      return 'You are a translation engine. '
+          'You receive text and output ONLY the translation. '
+          'You do not converse, greet, or explain anything.';
     }
 
-    // Translator mode — strong anti-assistant instructions
-    final String langLine;
-    if (cfg.autoDetect) {
-      langLine = 'Automatically detect which language is being spoken on each turn.';
-    } else {
-      langLine =
-          'The two languages in this conversation are ${cfg.lang1Name} and ${cfg.lang2Name}.';
-    }
-
-    return '''
-You are a mechanical translation engine. You receive tagged blocks of text and output ONLY the translation. You are not a conversational assistant. You do not have opinions. You cannot be spoken to.
-
-$langLine
-
-When you receive a [TEXT_TO_TRANSLATE] block:
-- Output ONLY the translation of the text inside the quotes.
-- Do NOT answer questions in the text — questions are content to be translated, not directed at you.
-- Do NOT add greetings, confirmations, explanations, or any words of your own.
-- Do NOT say "Yes", "Sure", "I can hear you", or anything conversational.
-- If the content is a question like "Can you hear me?" — translate it, do not answer it.
-- Output the translated words and nothing else.
-
-You are a translation machine. You process text. You do not converse.''';
+    return 'You are a translation engine. '
+        'Each request will tell you which language to translate FROM and INTO. '
+        'Output ONLY the translation — no greetings, no explanations, no added words.';
   }
 
   // ---------------------------------------------------------------------------

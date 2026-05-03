@@ -230,14 +230,29 @@ class _LangChip extends StatelessWidget {
   }
 }
 
-class _ControlPanel extends StatelessWidget {
+class _ControlPanel extends ConsumerWidget {
   const _ControlPanel({required this.state, required this.onEnd});
   final ConversationState state;
   final VoidCallback onEnd;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final cfg = state.languageConfig ?? const LanguageConfig();
+    final isAutoDetect = cfg.autoDetect;
+
+    // Determine display names for the current speaker's two sides.
+    final lang1 = state.detectedLang1 ??
+        (isAutoDetect ? 'Speaker 1' : cfg.lang1Name);
+    final lang2 = state.detectedLang2 ??
+        (isAutoDetect ? 'Speaker 2' : cfg.lang2Name);
+
+    final currentSpeaker = state.activeSpeaker ?? Speaker.user1;
+    final isUser1 = currentSpeaker == Speaker.user1;
+    final speakerLabel = isUser1 ? lang1 : lang2;
+    final speakerColor =
+        isUser1 ? AppTheme.user1Color : AppTheme.user2Color;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
       child: Column(
@@ -248,24 +263,58 @@ class _ControlPanel extends StatelessWidget {
           const SizedBox(height: 24),
           // Status badge
           StatusBadge(status: state.status),
-          const SizedBox(height: 32),
-          // Info row
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.info_outline, size: 14, color: Colors.grey),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  'Speak naturally – Grok detects language automatically.',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.outline),
-                  textAlign: TextAlign.center,
+          const SizedBox(height: 24),
+
+          // ── Speaker toggle ────────────────────────────────────────────────
+          if (state.isSessionActive) ...[
+            Text(
+              'Now speaking:',
+              style: theme.textTheme.labelSmall
+                  ?.copyWith(color: theme.colorScheme.outline),
+            ),
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: () => ref
+                  .read(conversationControllerProvider.notifier)
+                  .toggleSpeaker(),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 20, vertical: 10),
+                decoration: BoxDecoration(
+                  color: speakerColor.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                      color: speakerColor.withValues(alpha: 0.6),
+                      width: 1.5),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.person, color: speakerColor, size: 18),
+                    const SizedBox(width: 8),
+                    Text(
+                      speakerLabel,
+                      style: TextStyle(
+                          color: speakerColor,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14),
+                    ),
+                    const SizedBox(width: 8),
+                    Icon(Icons.swap_horiz, color: speakerColor, size: 16),
+                  ],
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 40),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Tap to switch speaker',
+              style: theme.textTheme.labelSmall
+                  ?.copyWith(color: theme.colorScheme.outline),
+            ),
+            const SizedBox(height: 24),
+          ],
+
           // End session button
           OutlinedButton.icon(
             onPressed: onEnd,
@@ -273,7 +322,8 @@ class _ControlPanel extends StatelessWidget {
             label: const Text('End Session'),
             style: OutlinedButton.styleFrom(
               foregroundColor: theme.colorScheme.error,
-              side: BorderSide(color: theme.colorScheme.error.withValues(alpha: 0.6)),
+              side: BorderSide(
+                  color: theme.colorScheme.error.withValues(alpha: 0.6)),
               minimumSize: const Size(180, 48),
               shape: const StadiumBorder(),
             ),

@@ -99,6 +99,11 @@ class ConversationController extends StateNotifier<ConversationState> {
   Speaker? _pendingSpeaker;
   bool _responseMessageAdded = false;
 
+  // Monotonically-increasing counter; incremented on every _triggerTranslation.
+  // Events arriving with a stale generation are silently ignored.
+  int _currentGeneration = 0;
+  int _activeGeneration = 0;
+
   // Prevents a second translation firing while the first is still in flight
   // (stops echo loops where speaker audio re-enters the mic).
   bool _translationInFlight = false;
@@ -229,6 +234,19 @@ class ConversationController extends StateNotifier<ConversationState> {
     }
   }
 
+  /// Manually toggle which speaker is currently active.
+  ///
+  /// In auto-detect mode language detection still runs, but after a manual
+  /// toggle the override takes priority until the next manual switch.
+  void toggleSpeaker() {
+    final current = state.activeSpeaker ?? Speaker.user1;
+    final next = current == Speaker.user1 ? Speaker.user2 : Speaker.user1;
+    state = state.copyWith(
+      activeSpeaker: next,
+      speakerOverrideActive: true,
+    );
+  }
+
   /// Toggle subtitle visibility (persisted).
   Future<void> toggleSubtitles() async {
     final newVal = !state.subtitlesEnabled;
@@ -318,10 +336,17 @@ class ConversationController extends StateNotifier<ConversationState> {
 
       case GrokServerEventType.responseCreated:
         _setStatus(ConversationStatus.translating);
+        // Accept this response only if it belongs to the current translation
+        // request.  Stale responses (e.g. a delayed reply from a request that
+        // was cancelled) will have _activeGeneration < _currentGeneration.
+        _activeGeneration = _currentGeneration;
         _responseMessageAdded = false;
+        _transcriptBuffer.clear();
         break;
 
       case GrokServerEventType.responseAudioDelta:
+        // Discard audio from stale/cancelled responses.
+        if (_activeGeneration != _currentGeneration) break;
         if (event.audioDelta != null && event.audioDelta!.isNotEmpty) {
           // First delta: begin buffering
           if (state.status != ConversationStatus.speaking) {
@@ -333,11 +358,13 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.responseAudioDone:
+        if (_activeGeneration != _currentGeneration) break;
         // All audio deltas received – play the assembled buffer
         _player.finishAndPlay();
         break;
 
       case GrokServerEventType.responseAudioTranscriptDelta:
+        if (_activeGeneration != _currentGeneration) break;
         if (event.transcriptDelta != null) {
           _transcriptBuffer.write(event.transcriptDelta);
           state = state.copyWith(
@@ -346,6 +373,7 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.responseAudioTranscriptDone:
+        if (_activeGeneration != _currentGeneration) break;
         final text = event.transcriptText ?? _transcriptBuffer.toString();
         if (text.isNotEmpty && !_responseMessageAdded) {
           _responseMessageAdded = true;
@@ -357,6 +385,7 @@ class ConversationController extends StateNotifier<ConversationState> {
 
       // Text-only mode (subtitles): stream translated text directly
       case GrokServerEventType.responseTextDelta:
+        if (_activeGeneration != _currentGeneration) break;
         if (event.transcriptDelta != null) {
           _transcriptBuffer.write(event.transcriptDelta);
           state = state.copyWith(
@@ -365,6 +394,7 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.responseTextDone:
+        if (_activeGeneration != _currentGeneration) break;
         final textDone =
             event.transcriptText ?? _transcriptBuffer.toString();
         if (textDone.isNotEmpty && !_responseMessageAdded) {
@@ -376,13 +406,19 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.responseDone:
+        // Only process the completion of the current generation.
+        if (_activeGeneration != _currentGeneration) break;
         if (!_responseMessageAdded && _transcriptBuffer.isNotEmpty) {
           _responseMessageAdded = true;
           _addMessage(_transcriptBuffer.toString());
           _transcriptBuffer.clear();
           state = state.copyWith(partialTranscript: '');
         }
-        _responseMessageAdded = false;
+        // Do NOT reset _responseMessageAdded here — it must stay true until
+        // the next _triggerTranslation (which increments _currentGeneration
+        // and resets _responseMessageAdded via responseCreated). This prevents
+        // a spurious second bubble if responseDone arrives after the
+        // transcript-done event already added the message.
         _translationInFlight = false; // allow next utterance
 
         // In translator (voice) mode clear any mic echo that crept in while
@@ -444,10 +480,8 @@ class ConversationController extends StateNotifier<ConversationState> {
       toLang = cfg.autoDetect ? 'English' : cfg.lang2Name;
       speaker = Speaker.user1;
     } else if (cfg.autoDetect) {
-      // Use the speaker identity from language detection rather than a blind
-      // toggle. This correctly handles the case where the same person speaks
-      // twice in a row and avoids passing 'the other language' (a meaningless
-      // target) to the model when only one language has been identified yet.
+      // Prefer the manually-set speaker when the user has toggled it;
+      // otherwise fall back to the auto-detected speaker.
       final currentSpeaker = state.activeSpeaker ?? Speaker.user1;
       final d1 = state.detectedLang1 ?? 'the detected language';
       // If the second language hasn't been detected yet, fall back to English
@@ -462,13 +496,23 @@ class ConversationController extends StateNotifier<ConversationState> {
         fromLang = d2; toLang = d1; speaker = Speaker.user2;
       }
     } else {
-      if (_translateForward) {
-        fromLang = cfg.lang1Name; toLang = cfg.lang2Name; speaker = Speaker.user1;
+      // Fixed-language mode: honour manual speaker override when active.
+      if (state.speakerOverrideActive) {
+        final currentSpeaker = state.activeSpeaker ?? Speaker.user1;
+        if (currentSpeaker == Speaker.user1) {
+          fromLang = cfg.lang1Name; toLang = cfg.lang2Name; speaker = Speaker.user1;
+        } else {
+          fromLang = cfg.lang2Name; toLang = cfg.lang1Name; speaker = Speaker.user2;
+        }
       } else {
-        fromLang = cfg.lang2Name; toLang = cfg.lang1Name; speaker = Speaker.user2;
+        if (_translateForward) {
+          fromLang = cfg.lang1Name; toLang = cfg.lang2Name; speaker = Speaker.user1;
+        } else {
+          fromLang = cfg.lang2Name; toLang = cfg.lang1Name; speaker = Speaker.user2;
+        }
+        // Flip direction for next utterance in fixed-language mode only
+        _translateForward = !_translateForward;
       }
-      // Flip direction for next utterance in fixed-language mode only
-      _translateForward = !_translateForward;
     }
 
     _pendingFrom = fromLang;
@@ -476,6 +520,7 @@ class ConversationController extends StateNotifier<ConversationState> {
     _pendingSpeaker = speaker;
     _responseMessageAdded = false;
     _translationInFlight = true; // block new transcriptions until response done
+    _currentGeneration++; // invalidate any in-flight response from previous request
 
     final textOnly = state.appMode == AppMode.subtitles;
     _log.i('[${textOnly ? "text" : "voice"} $fromLang → $toLang] "$transcript"');
@@ -509,29 +554,56 @@ class ConversationController extends StateNotifier<ConversationState> {
       orElse: () => SupportedLanguage(code, _capitalize(code), '🌐'),
     );
 
-    // Assign alternately: first detection → lang1, second different → lang2
+    // Register newly encountered languages regardless of manual override.
+    String? newLang1 = state.detectedLang1;
+    String? newLang1Flag = state.detectedLang1Flag;
+    String? newLang2 = state.detectedLang2;
+    String? newLang2Flag = state.detectedLang2Flag;
+
     if (state.detectedLang1 == null) {
-      state = state.copyWith(
-        detectedLang1: match.name,
-        detectedLang1Flag: match.flag,
-        activeSpeaker: Speaker.user1,
-      );
-    } else if (match.name == state.detectedLang1) {
-      state = state.copyWith(activeSpeaker: Speaker.user1);
-    } else if (state.detectedLang2 == null) {
-      state = state.copyWith(
-        detectedLang2: match.name,
-        detectedLang2Flag: match.flag,
-        activeSpeaker: Speaker.user2,
-      );
-    } else {
-      // Both languages known — track which one is speaking
-      state = state.copyWith(
-        activeSpeaker: match.name == state.detectedLang2
-            ? Speaker.user2
-            : Speaker.user1,
-      );
+      newLang1 = match.name;
+      newLang1Flag = match.flag;
+    } else if (match.name != state.detectedLang1 && state.detectedLang2 == null) {
+      newLang2 = match.name;
+      newLang2Flag = match.flag;
     }
+
+    // If the user has manually set the speaker, respect that choice and do not
+    // auto-reassign based on language detection.  The manual override persists
+    // until the user taps the toggle again.
+    if (state.speakerOverrideActive) {
+      state = state.copyWith(
+        detectedLang1: newLang1,
+        detectedLang1Flag: newLang1Flag,
+        detectedLang2: newLang2,
+        detectedLang2Flag: newLang2Flag,
+      );
+      return;
+    }
+
+    // Automatic speaker assignment based on detected language.
+    Speaker nextSpeaker;
+    if (state.detectedLang1 == null) {
+      // First detection → User 1
+      nextSpeaker = Speaker.user1;
+    } else if (match.name == state.detectedLang1) {
+      nextSpeaker = Speaker.user1;
+    } else if (state.detectedLang2 == null) {
+      // Second distinct language → User 2
+      nextSpeaker = Speaker.user2;
+    } else {
+      nextSpeaker = match.name == state.detectedLang2
+          ? Speaker.user2
+          : Speaker.user1;
+    }
+
+    state = state.copyWith(
+      detectedLang1: newLang1,
+      detectedLang1Flag: newLang1Flag,
+      detectedLang2: newLang2,
+      detectedLang2Flag: newLang2Flag,
+      activeSpeaker: nextSpeaker,
+    );
   }
 
   String _capitalize(String s) =>

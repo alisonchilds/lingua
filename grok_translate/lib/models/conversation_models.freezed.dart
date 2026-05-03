@@ -582,7 +582,11 @@ mixin _$ConversationState {
   String? get detectedLang2 =>
       throw _privateConstructorUsedError; // e.g. "French"
   String? get detectedLang1Flag => throw _privateConstructorUsedError;
-  String? get detectedLang2Flag => throw _privateConstructorUsedError;
+  String? get detectedLang2Flag =>
+      throw _privateConstructorUsedError; // When set, overrides automatic language detection for speaker assignment.
+// The user taps a "Switch Speaker" button to tell the app that the other
+// person is now speaking.
+  bool get speakerOverrideActive => throw _privateConstructorUsedError;
 
   /// Create a copy of ConversationState
   /// with the given fields replaced by the non-null parameter values.
@@ -613,7 +617,8 @@ abstract class $ConversationStateCopyWith<$Res> {
       String? detectedLang1,
       String? detectedLang2,
       String? detectedLang1Flag,
-      String? detectedLang2Flag});
+      String? detectedLang2Flag,
+      bool speakerOverrideActive});
 
   $LanguageConfigCopyWith<$Res>? get languageConfig;
 }
@@ -649,6 +654,7 @@ class _$ConversationStateCopyWithImpl<$Res, $Val extends ConversationState>
     Object? detectedLang2 = freezed,
     Object? detectedLang1Flag = freezed,
     Object? detectedLang2Flag = freezed,
+    Object? speakerOverrideActive = null,
   }) {
     return _then(_value.copyWith(
       status: null == status
@@ -715,6 +721,10 @@ class _$ConversationStateCopyWithImpl<$Res, $Val extends ConversationState>
           ? _value.detectedLang2Flag
           : detectedLang2Flag // ignore: cast_nullable_to_non_nullable
               as String?,
+      speakerOverrideActive: null == speakerOverrideActive
+          ? _value.speakerOverrideActive
+          : speakerOverrideActive // ignore: cast_nullable_to_non_nullable
+              as bool,
     ) as $Val);
   }
 
@@ -757,7 +767,8 @@ abstract class _$$ConversationStateImplCopyWith<$Res>
       String? detectedLang1,
       String? detectedLang2,
       String? detectedLang1Flag,
-      String? detectedLang2Flag});
+      String? detectedLang2Flag,
+      bool speakerOverrideActive});
 
   @override
   $LanguageConfigCopyWith<$Res>? get languageConfig;
@@ -792,6 +803,7 @@ class __$$ConversationStateImplCopyWithImpl<$Res>
     Object? detectedLang2 = freezed,
     Object? detectedLang1Flag = freezed,
     Object? detectedLang2Flag = freezed,
+    Object? speakerOverrideActive = null,
   }) {
     return _then(_$ConversationStateImpl(
       status: null == status
@@ -858,6 +870,10 @@ class __$$ConversationStateImplCopyWithImpl<$Res>
           ? _value.detectedLang2Flag
           : detectedLang2Flag // ignore: cast_nullable_to_non_nullable
               as String?,
+      speakerOverrideActive: null == speakerOverrideActive
+          ? _value.speakerOverrideActive
+          : speakerOverrideActive // ignore: cast_nullable_to_non_nullable
+              as bool,
     ));
   }
 }
@@ -881,7 +897,8 @@ class _$ConversationStateImpl implements _ConversationState {
       this.detectedLang1,
       this.detectedLang2,
       this.detectedLang1Flag,
-      this.detectedLang2Flag})
+      this.detectedLang2Flag,
+      this.speakerOverrideActive = false})
       : _messages = messages;
 
   @override
@@ -935,10 +952,16 @@ class _$ConversationStateImpl implements _ConversationState {
   final String? detectedLang1Flag;
   @override
   final String? detectedLang2Flag;
+// When set, overrides automatic language detection for speaker assignment.
+// The user taps a "Switch Speaker" button to tell the app that the other
+// person is now speaking.
+  @override
+  @JsonKey()
+  final bool speakerOverrideActive;
 
   @override
   String toString() {
-    return 'ConversationState(status: $status, messages: $messages, languageConfig: $languageConfig, activeSpeaker: $activeSpeaker, subtitlesEnabled: $subtitlesEnabled, appMode: $appMode, isConnected: $isConnected, isSessionActive: $isSessionActive, partialTranscript: $partialTranscript, errorMessage: $errorMessage, vadThreshold: $vadThreshold, vadSilenceDurationMs: $vadSilenceDurationMs, detectedLang1: $detectedLang1, detectedLang2: $detectedLang2, detectedLang1Flag: $detectedLang1Flag, detectedLang2Flag: $detectedLang2Flag)';
+    return 'ConversationState(status: $status, messages: $messages, languageConfig: $languageConfig, activeSpeaker: $activeSpeaker, subtitlesEnabled: $subtitlesEnabled, appMode: $appMode, isConnected: $isConnected, isSessionActive: $isSessionActive, partialTranscript: $partialTranscript, errorMessage: $errorMessage, vadThreshold: $vadThreshold, vadSilenceDurationMs: $vadSilenceDurationMs, detectedLang1: $detectedLang1, detectedLang2: $detectedLang2, detectedLang1Flag: $detectedLang1Flag, detectedLang2Flag: $detectedLang2Flag, speakerOverrideActive: $speakerOverrideActive)';
   }
 
   @override
@@ -974,7 +997,9 @@ class _$ConversationStateImpl implements _ConversationState {
             (identical(other.detectedLang1Flag, detectedLang1Flag) ||
                 other.detectedLang1Flag == detectedLang1Flag) &&
             (identical(other.detectedLang2Flag, detectedLang2Flag) ||
-                other.detectedLang2Flag == detectedLang2Flag));
+                other.detectedLang2Flag == detectedLang2Flag) &&
+            (identical(other.speakerOverrideActive, speakerOverrideActive) ||
+                other.speakerOverrideActive == speakerOverrideActive));
   }
 
   @override
@@ -995,7 +1020,8 @@ class _$ConversationStateImpl implements _ConversationState {
       detectedLang1,
       detectedLang2,
       detectedLang1Flag,
-      detectedLang2Flag);
+      detectedLang2Flag,
+      speakerOverrideActive);
 
   /// Create a copy of ConversationState
   /// with the given fields replaced by the non-null parameter values.
@@ -1024,7 +1050,8 @@ abstract class _ConversationState implements ConversationState {
       final String? detectedLang1,
       final String? detectedLang2,
       final String? detectedLang1Flag,
-      final String? detectedLang2Flag}) = _$ConversationStateImpl;
+      final String? detectedLang2Flag,
+      final bool speakerOverrideActive}) = _$ConversationStateImpl;
 
   @override
   ConversationStatus get status;
@@ -1058,7 +1085,12 @@ abstract class _ConversationState implements ConversationState {
   @override
   String? get detectedLang1Flag;
   @override
-  String? get detectedLang2Flag;
+  String?
+      get detectedLang2Flag; // When set, overrides automatic language detection for speaker assignment.
+// The user taps a "Switch Speaker" button to tell the app that the other
+// person is now speaking.
+  @override
+  bool get speakerOverrideActive;
 
   /// Create a copy of ConversationState
   /// with the given fields replaced by the non-null parameter values.
