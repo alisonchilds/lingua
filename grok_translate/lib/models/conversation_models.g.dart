@@ -40,9 +40,9 @@ const _$SpeakerEnumMap = {
 _$LanguageConfigImpl _$$LanguageConfigImplFromJson(Map<String, dynamic> json) =>
     _$LanguageConfigImpl(
       lang1Code: json['lang1Code'] as String? ?? 'auto',
-      lang2Code: json['lang2Code'] as String? ?? 'en',
+      lang2Code: json['lang2Code'] as String? ?? 'auto',
       lang1Name: json['lang1Name'] as String? ?? 'Auto Detect',
-      lang2Name: json['lang2Name'] as String? ?? 'English',
+      lang2Name: json['lang2Name'] as String? ?? 'Auto Detect',
       autoDetect: json['autoDetect'] as bool? ?? true,
     );
 

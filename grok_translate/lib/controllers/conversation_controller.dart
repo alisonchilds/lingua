@@ -93,22 +93,16 @@ class ConversationController extends StateNotifier<ConversationState> {
   // Accumulate transcript deltas for the current utterance
   final StringBuffer _transcriptBuffer = StringBuffer();
 
-  // Translation direction — flips after each utterance for natural alternation.
-  // true = lang1→lang2 (e.g. English→French), false = lang2→lang1
   bool _translateForward = true;
-
-  // Stores the from/to/speaker for the in-flight translation so _addMessage
-  // can label the bubble correctly without guessing.
   String? _pendingFrom;
   String? _pendingTo;
   Speaker? _pendingSpeaker;
-
-  // Prevents duplicate bubbles when both responseAudioTranscriptDone and
-  // responseDone try to add the same message.
   bool _responseMessageAdded = false;
 
-  // Debounce timer: accumulates transcript segments from a long utterance
-  // before firing a single translation request.
+  // Prevents a second translation firing while the first is still in flight
+  // (stops echo loops where speaker audio re-enters the mic).
+  bool _translationInFlight = false;
+
   Timer? _transcriptDebounce;
   final StringBuffer _transcriptAccumulator = StringBuffer();
 
@@ -304,12 +298,7 @@ class ConversationController extends StateNotifier<ConversationState> {
             (event.raw?['transcription'] as Map?)
                 ?.cast<String, dynamic>()['text'] as String? ??
             '';
-        if (rawText.isNotEmpty) {
-          // Accumulate transcript segments. Each natural pause in speech
-          // produces a separate transcription event — we collect them all
-          // and fire one translation after 1.2s of silence.
-          // The timer resets on every new segment so a long continuous
-          // speech never gets cut short.
+        if (rawText.isNotEmpty && !_translationInFlight) {
           _transcriptAccumulator
             ..write(_transcriptAccumulator.isNotEmpty ? ' ' : '')
             ..write(rawText.trim());
@@ -383,14 +372,17 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.responseDone:
-        // Fallback only if responseAudioTranscriptDone never fired
         if (!_responseMessageAdded && _transcriptBuffer.isNotEmpty) {
           _responseMessageAdded = true;
           _addMessage(_transcriptBuffer.toString());
           _transcriptBuffer.clear();
           state = state.copyWith(partialTranscript: '');
         }
-        _responseMessageAdded = false; // reset for next turn
+        _responseMessageAdded = false;
+        _translationInFlight = false; // allow next utterance
+        // Clear any echo that arrived while translation was playing
+        _transcriptAccumulator.clear();
+        _transcriptDebounce?.cancel();
         break;
 
       case GrokServerEventType.error:
@@ -457,11 +449,11 @@ class ConversationController extends StateNotifier<ConversationState> {
     // Flip direction for next utterance (translator mode only)
     if (!isSubtitles) _translateForward = !_translateForward;
 
-    // Store for bubble labelling
     _pendingFrom = fromLang;
     _pendingTo = toLang;
     _pendingSpeaker = speaker;
     _responseMessageAdded = false;
+    _translationInFlight = true; // block new transcriptions until response done
 
     final textOnly = state.appMode == AppMode.subtitles;
     _log.i('[${textOnly ? "text" : "voice"} $fromLang → $toLang] "$transcript"');

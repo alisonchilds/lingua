@@ -46,9 +46,9 @@ class TranslationMessage with _$TranslationMessage {
 class LanguageConfig with _$LanguageConfig {
   const factory LanguageConfig({
     @Default('auto') String lang1Code,
-    @Default('en') String lang2Code,       // default target: English
+    @Default('auto') String lang2Code,
     @Default('Auto Detect') String lang1Name,
-    @Default('English') String lang2Name,  // default target: English
+    @Default('Auto Detect') String lang2Name,
     @Default(true) bool autoDetect,
   }) = _LanguageConfig;
 

@@ -162,14 +162,15 @@ class _LanguageBadgeRow extends StatelessWidget {
     final cfg = state.languageConfig ?? const LanguageConfig();
     final theme = Theme.of(context);
 
-    // Show detected language if available, otherwise show config or 'Auto'
     final lang1 = state.detectedLang1 ??
         (cfg.autoDetect ? 'Auto' : cfg.lang1Name);
     final lang1Flag = state.detectedLang1Flag ?? (cfg.autoDetect ? '🌐' : '');
     final detected1 = state.detectedLang1 != null;
 
+    // Only show lang2 badge content once a second language is actually detected
+    // or when the user explicitly configured a language pair (non-auto mode).
     final lang2 = state.detectedLang2 ??
-        (cfg.autoDetect ? 'Auto' : cfg.lang2Name);
+        (cfg.autoDetect ? '?' : cfg.lang2Name);
     final lang2Flag = state.detectedLang2Flag ?? (cfg.autoDetect ? '🌐' : '');
     final detected2 = state.detectedLang2 != null;
 
