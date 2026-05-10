@@ -48,7 +48,14 @@ class SttService {
   final _connectedController = StreamController<bool>.broadcast();
 
   bool _connected = false;
+  bool _disposed = false;
+  // When true, the service reconnects automatically after each utterance.
+  // The xAI STT API closes the connection after every transcript.done event
+  // ("each connection handles a single utterance"). Auto-reconnect keeps
+  // the session alive indefinitely for continuous live captioning.
+  bool _autoReconnect = false;
   String? _apiKey;
+  String? _queryString; // cached so reconnect uses same params
 
   Stream<SttTranscriptEvent> get transcripts => _transcriptController.stream;
   Stream<bool> get connectionStatus => _connectedController.stream;
@@ -58,29 +65,30 @@ class SttService {
 
   Future<void> connect({String? apiKey}) async {
     _apiKey = apiKey;
-    await _close();
+    _autoReconnect = true;
+    _disposed = false;
 
-    final params = Uri(queryParameters: {
+    _queryString = Uri(queryParameters: {
       'sample_rate': '16000',
       'encoding': 'pcm',
       'interim_results': 'true',
       'endpointing': '300', // ms silence before speech_final
     }).query;
 
+    await _openConnection();
+  }
+
+  Future<void> _openConnection() async {
+    await _close(permanent: false); // close existing but keep auto-reconnect
+
     final uri = kIsWeb
-        ? Uri.parse('$kSttProxyUrl?$params')
-        : Uri.parse('$kSttDirectBase?$params');
+        ? Uri.parse('$kSttProxyUrl?$_queryString')
+        : Uri.parse('$kSttDirectBase?$_queryString');
 
     _log.i('STT connecting → $uri');
 
     try {
-      if (kIsWeb) {
-        _ws = await NativeWebSocket.connect(uri);
-      } else {
-        // Native: NativeWebSocket stub; fall back if needed.
-        // For now use the same web path — native direct needs IOWebSocketChannel.
-        _ws = await NativeWebSocket.connect(uri);
-      }
+      _ws = await NativeWebSocket.connect(uri);
 
       _wsSub = _ws!.stream.listen(
         _onMessage,
@@ -89,15 +97,27 @@ class SttService {
           _setConnected(false);
         },
         onDone: () {
-          _log.w('STT WebSocket closed.');
+          _log.w('STT utterance complete — connection closed.');
           _setConnected(false);
+          // The xAI STT API closes after every utterance ("each connection
+          // handles a single utterance"). Reconnect so the next phrase
+          // is captured without any action from the caller.
+          if (_autoReconnect && !_disposed) {
+            _log.i('STT auto-reconnecting for next utterance…');
+            _openConnection();
+          }
         },
       );
-
-      // Wait for transcript.created before marking connected.
+      // transcript.created signals the server is ready; _setConnected(true)
+      // is called from _onMessage when that event arrives.
     } catch (e) {
       _log.e('STT connect failed: $e');
       _setConnected(false);
+      // Retry after a brief delay
+      if (_autoReconnect && !_disposed) {
+        await Future.delayed(const Duration(seconds: 1));
+        _openConnection();
+      }
     }
   }
 
@@ -122,10 +142,15 @@ class SttService {
     }
   }
 
-  Future<void> disconnect() async => _close();
+  Future<void> disconnect() async {
+    _autoReconnect = false;
+    await _close(permanent: true);
+  }
 
   Future<void> dispose() async {
-    await _close();
+    _disposed = true;
+    _autoReconnect = false;
+    await _close(permanent: true);
     await _transcriptController.close();
     await _connectedController.close();
   }
@@ -174,12 +199,12 @@ class SttService {
     }
   }
 
-  Future<void> _close() async {
+  Future<void> _close({bool permanent = true}) async {
     await _wsSub?.cancel();
     _wsSub = null;
     _ws?.close(1000);
     _ws = null;
-    _setConnected(false);
+    if (permanent) _setConnected(false);
   }
 
   void _setConnected(bool value) {
