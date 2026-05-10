@@ -184,6 +184,13 @@ class ConversationController extends StateNotifier<ConversationState> {
   /// On web the Cloudflare Worker proxy holds the API key, so no key is needed
   /// from the user. On native (iOS/Android) a key must be stored in Settings.
   Future<void> startSession({String? apiKey}) async {
+    // Clean up any previous session (translator or subtitles) before starting
+    // a new one — prevents stale realtime-API events or STT connections from
+    // leaking into the new session.
+    if (state.isSessionActive) {
+      await endSession();
+    }
+
     final key = apiKey ?? _prefs.getApiKey();
     if (!kIsWeb && (key == null || key.isEmpty)) {
       _setError('API key not configured. Please enter it in Settings.');

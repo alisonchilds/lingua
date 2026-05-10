@@ -80,7 +80,7 @@ class SttService {
       'sample_rate': '16000',
       'encoding': 'pcm',
       'interim_results': 'true',
-      'endpointing': '300', // ms silence before speech_final
+      'endpointing': '500', // ms silence before speech_final
     }).query;
 
     await _openConnection();

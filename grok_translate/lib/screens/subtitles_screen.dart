@@ -250,9 +250,10 @@ class _SubtitleLine extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Detected source language label (small, muted)
-          if (fromLang.isNotEmpty) ...[
+          // Only show when we have a real language name (not a fallback string).
+          if (fromLang.isNotEmpty && !fromLang.toLowerCase().contains('detected')) ...[
             Text(
-              fromLang,
+              'Translated from $fromLang',
               style: theme.textTheme.labelSmall?.copyWith(
                 color: theme.colorScheme.outline,
                 letterSpacing: 0.4,
