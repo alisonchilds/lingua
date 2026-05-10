@@ -129,6 +129,11 @@ class ConversationController extends StateNotifier<ConversationState> {
   Timer? _transcriptDebounce;
   final StringBuffer _transcriptAccumulator = StringBuffer();
 
+  // Subtitles mode: true once a speechFinal event has been received for the
+  // current utterance. Cleared when isFinal fires (triggering translation) or
+  // when a new non-final partial arrives (next utterance started).
+  bool _sttSpeechEnded = false;
+
   void _init() {
     final langCfg = _prefs.getLanguageConfig();
     final vadSettings = _prefs.getVadSettings();
@@ -231,8 +236,23 @@ class ConversationController extends StateNotifier<ConversationState> {
     _sttSub = _stt.transcripts.listen((event) async {
       if (event.text.isEmpty) return;
 
-      if (event.isFinal && event.speechFinal) {
-        // Definitive final transcript — clear live preview, translate, add to list
+      if (!event.speechFinal && !event.isFinal) {
+        // Ordinary partial — new utterance in progress, reset end-of-speech flag.
+        _sttSpeechEnded = false;
+        state = state.copyWith(partialTranscript: event.text);
+        _setStatus(ConversationStatus.translating);
+        return;
+      }
+
+      // Record that the speaker has stopped.
+      if (event.speechFinal) {
+        _sttSpeechEnded = true;
+      }
+
+      // Translate once we have the locked-in transcript AND speech has ended.
+      // The two conditions may arrive in either order or in a single event.
+      if (_sttSpeechEnded && event.isFinal) {
+        _sttSpeechEnded = false; // consumed — ready for the next utterance
         state = state.copyWith(partialTranscript: '');
         _setStatus(ConversationStatus.listening);
 
@@ -244,11 +264,6 @@ class ConversationController extends StateNotifier<ConversationState> {
         if (translation != null && translation.isNotEmpty) {
           _addSubtitleMessage(translation, targetLang);
         }
-      } else {
-        // Still in-progress (partial or finalised segment but speech ongoing) —
-        // show as live caption without triggering a translation yet.
-        state = state.copyWith(partialTranscript: event.text);
-        _setStatus(ConversationStatus.translating);
       }
     });
 
