@@ -109,9 +109,14 @@ class GrokApiService {
     required String toLanguage,
     bool textOnly = false,
   }) {
-    // Cancel any response Grok may have auto-started (e.g. if a previous
-    // turn's audio was committed before we could stop it).
-    _send({'type': 'response.cancel'});
+    // In audio (translator) mode, cancel any response Grok may have
+    // auto-started due to barge-in or mic echo. Not needed in text-only
+    // (subtitles) mode — there is no audio output and create_response is
+    // false, so there is never an active response to cancel. Sending an
+    // empty cancel can cause a server error event that disrupts the flow.
+    if (!textOnly) {
+      _send({'type': 'response.cancel'});
+    }
 
     // Frame as a translation task, not a conversational turn.
     // Wrapping in [TEXT_TO_TRANSLATE] makes it clear this is source material

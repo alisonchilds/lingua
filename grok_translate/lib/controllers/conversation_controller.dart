@@ -385,13 +385,16 @@ class ConversationController extends StateNotifier<ConversationState> {
         _responseMessageAdded = false;
         _translationInFlight = false; // allow next utterance
 
-        // In translator (voice) mode clear any mic echo that crept in while
-        // audio was playing back. In subtitles mode there is no playback, so
-        // we must NOT clear the accumulator — it may already contain the next
-        // phrase that arrived while the previous translation was in flight.
         if (state.appMode != AppMode.subtitles) {
+          // Translator mode: clear any mic echo that crept in during playback.
           _transcriptAccumulator.clear();
           _transcriptDebounce?.cancel();
+        } else if (state.isSessionActive) {
+          // Subtitles mode has no audio playback, so the player callback that
+          // normally drives the status back to listening never fires. Explicitly
+          // return to listening so the UI shows the session is still active and
+          // the waveform/status indicator reflect the correct state.
+          _setStatus(ConversationStatus.listening);
         }
         break;
 
