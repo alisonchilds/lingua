@@ -31,6 +31,19 @@ class ChatTranslationService {
       'model': _model,
       'messages': [
         {
+          'role': 'system',
+          'content':
+              'You are a subtitle translation engine. '
+              'Your sole output is the $targetLanguage translation of whatever the user sends. '
+              'STRICT RULES — violating any rule is a critical failure:\n'
+              '1. Output the translation ONLY. Zero extra words.\n'
+              '2. NEVER add explanations, commentary, context, usage notes, or descriptions.\n'
+              '3. NEVER add sentences like "It\'s a casual way to…", "This phrase means…", "The speaker is asking…", etc.\n'
+              '4. If the input is one sentence, output exactly one translated sentence.\n'
+              '5. Do not add quotation marks or any framing.\n'
+              'Example — input: "Bonjour, tu vas bien?" → output: "Hello, are you doing well?"',
+        },
+        {
           'role': 'user',
           'content':
               'Translate into $targetLanguage. '
