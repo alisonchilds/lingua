@@ -359,13 +359,16 @@ class ConversationController extends StateNotifier<ConversationState> {
       case GrokServerEventType.responseTextDelta:
         if (event.transcriptDelta != null) {
           _transcriptBuffer.write(event.transcriptDelta);
-          // Don't show the LANG: prefix line in the streaming preview.
+          // Strip the LANG:[code] prefix from the streaming preview.
+          // The model may use a newline OR a space after the code.
           final raw = _transcriptBuffer.toString();
-          final visible = raw.startsWith('LANG:')
-              ? raw.contains('\n')
-                  ? raw.substring(raw.indexOf('\n') + 1)
-                  : ''
-              : raw;
+          final langPrefixMatch =
+              RegExp(r'^LANG:[a-zA-Z]{2,3}\s+').firstMatch(raw);
+          final visible = langPrefixMatch != null
+              ? raw.substring(langPrefixMatch.end)
+              : raw.startsWith('LANG:')
+                  ? '' // prefix still streaming, hide until complete
+                  : raw;
           state = state.copyWith(partialTranscript: visible);
         }
         break;
@@ -424,11 +427,11 @@ class ConversationController extends StateNotifier<ConversationState> {
     final from = _pendingFrom ?? (state.languageConfig?.lang1Name ?? 'Language 1');
     final to = _pendingTo ?? (state.languageConfig?.lang2Name ?? 'Language 2');
 
-    // Extract LANG:[code] prefix that the model adds in subtitles mode so
-    // we can update the detected-language label even though xAI's STT API
-    // doesn't include language detection in transcription events.
+    // Extract LANG:[code] prefix that the model adds in subtitles mode.
+    // The model may use a newline OR a space as separator (e.g. "LANG:en\n"
+    // or "LANG:en Translation"), so match any whitespace after the code.
     String textForSanitization = translatedText;
-    final langPrefix = RegExp(r'^LANG:([a-zA-Z]{2,3})\s*\n', multiLine: false);
+    final langPrefix = RegExp(r'^LANG:([a-zA-Z]{2,3})\s+', multiLine: false);
     final langMatch = langPrefix.firstMatch(translatedText.trimLeft());
     if (langMatch != null) {
       final isoCode = langMatch.group(1)!.toLowerCase();
