@@ -408,7 +408,11 @@ class ConversationController extends StateNotifier<ConversationState> {
         }
         _responseMessageAdded = false;
         _translationInFlight = false;
-        _api.clearConversationHistory();
+        // Do NOT call clearConversationHistory() here. If the user has
+        // already started speaking the next phrase, its VAD audio item may
+        // be pending transcription. Deleting it here would cancel that
+        // transcription and silently stop the session. Cleanup happens at
+        // the start of requestTranslation() for the next phrase instead.
 
         if (state.appMode != AppMode.subtitles) {
           // Translator mode: clear mic echo that crept in during playback.

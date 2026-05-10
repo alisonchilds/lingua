@@ -65,9 +65,13 @@ class GrokApiService {
   LanguageConfig? _lastLangConfig;
   VadSettings? _lastVadSettings;
 
-  // Conversation item IDs received from conversation.item.added events.
-  // Cleared after each response so every translation starts with empty context.
-  final List<String> _conversationItemIds = [];
+  // VAD audio items not yet transcribed — must NOT be deleted or the server
+  // will never fire inputAudioTranscriptionCompleted for that phrase.
+  final Set<String> _vadPendingIds = {};
+  // VAD audio items whose transcription has already arrived — safe to delete.
+  final Set<String> _vadTranscribedIds = {};
+  // Items we injected (few-shot examples, translation requests, assistant replies).
+  final List<String> _injectedItemIds = [];
 
   Stream<GrokServerEvent> get events => _eventController.stream;
   Stream<bool> get connectionStatus => _connectedController.stream;
@@ -281,16 +285,18 @@ class GrokApiService {
     }
   }
 
-  /// Delete every tracked conversation item from the server's history.
+  /// Delete injected items and transcribed audio items before each new request.
   ///
-  /// Called after each response.done to ensure the next translation request
-  /// sees an empty conversation context, preventing the model from treating
-  /// previous translation exchanges as a conversational chat history.
+  /// Only items that have already produced their transcription are removed.
+  /// VAD audio items still awaiting transcription (_vadPendingIds) are left
+  /// untouched — deleting them would cause the server to cancel transcription
+  /// for the next phrase and silently stop the session.
   void clearConversationHistory() {
-    for (final id in List<String>.from(_conversationItemIds)) {
+    for (final id in [..._injectedItemIds, ..._vadTranscribedIds]) {
       _send({'type': 'conversation.item.delete', 'item_id': id});
     }
-    _conversationItemIds.clear();
+    _injectedItemIds.clear();
+    _vadTranscribedIds.clear();
   }
 
   void updateSession({
@@ -508,16 +514,36 @@ If you ever output anything except pure translated speech, you will be immediate
       final json = jsonDecode(raw as String) as Map<String, dynamic>;
       final typeStr = json['type'] as String? ?? '';
 
-      // Track conversation item IDs so we can delete them after each response
-      // and keep every translation request isolated from prior context.
       if (typeStr == 'conversation.item.added') {
-        final itemId =
-            (json['item'] as Map<String, dynamic>?)?['id'] as String?;
+        final item = json['item'] as Map<String, dynamic>?;
+        final itemId = item?['id'] as String?;
         if (itemId != null) {
-          _conversationItemIds.add(itemId);
-          _log.d('Tracking conversation item: $itemId');
+          // Distinguish VAD-created audio items from items we injected.
+          // Deleting a pending VAD item before its transcription arrives
+          // prevents inputAudioTranscriptionCompleted from ever firing,
+          // which causes the session to silently stop after one phrase.
+          final contentList = item?['content'] as List?;
+          final contentType = contentList?.isNotEmpty == true
+              ? (contentList![0] as Map?)?.cast<String, dynamic>()['type']
+              : null;
+          if (contentType == 'input_audio') {
+            _vadPendingIds.add(itemId);
+            _log.d('VAD audio item pending transcription: $itemId');
+          } else {
+            _injectedItemIds.add(itemId);
+            _log.d('Injected item tracked: $itemId');
+          }
         }
-        return; // No need to broadcast this to the controller
+        return;
+      }
+
+      // When a transcription arrives, mark the audio item as safe to delete.
+      if (typeStr == 'conversation.item.input_audio_transcription.completed') {
+        final itemId = json['item_id'] as String?;
+        if (itemId != null && _vadPendingIds.remove(itemId)) {
+          _vadTranscribedIds.add(itemId);
+          _log.d('VAD audio item transcribed (safe to delete): $itemId');
+        }
       }
 
       final eventType = grokEventTypeFromString(typeStr);
@@ -613,8 +639,10 @@ If you ever output anything except pure translated speech, you will be immediate
     try { await _channel?.sink.close(); } catch (_) {}
     _channel = null;
 
-    // Items only exist within a WebSocket session; clear IDs on close.
-    _conversationItemIds.clear();
+    // Items only exist within a WebSocket session; clear all tracking on close.
+    _vadPendingIds.clear();
+    _vadTranscribedIds.clear();
+    _injectedItemIds.clear();
   }
 
   void _setConnected(bool value) {

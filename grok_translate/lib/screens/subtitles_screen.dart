@@ -116,6 +116,10 @@ class _SubtitlesScreenState extends ConsumerState<SubtitlesScreen> {
 
             const Divider(height: 1),
 
+            // ── Debug status bar ─────────────────────────────────────────
+            _DebugBar(state: state),
+            const Divider(height: 1),
+
             // ── Subtitle log ─────────────────────────────────────────────
             Expanded(
               child: state.messages.isEmpty && state.partialTranscript.isEmpty
@@ -151,6 +155,47 @@ class _SubtitlesScreenState extends ConsumerState<SubtitlesScreen> {
 }
 
 // ── Sub-widgets ───────────────────────────────────────────────────────────────
+
+/// Thin diagnostic bar showing the session's internal state so that
+/// screenshots make it immediately obvious where the pipeline has stalled.
+class _DebugBar extends StatelessWidget {
+  const _DebugBar({required this.state});
+  final ConversationState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final statusStr = switch (state.status) {
+      ConversationStatus.listening   => '🎙 listening',
+      ConversationStatus.translating => '⚙ translating',
+      ConversationStatus.speaking    => '🔊 speaking',
+      ConversationStatus.error       => '✗ error',
+      ConversationStatus.idle        => '— idle',
+    };
+    final conn = state.isConnected ? '✓ connected' : '✗ disconnected';
+    final phrases = '${state.messages.length} phrase${state.messages.length == 1 ? '' : 's'}';
+    final errPart = state.status == ConversationStatus.error && state.errorMessage != null
+        ? ' | ${state.errorMessage}'
+        : '';
+
+    return Container(
+      width: double.infinity,
+      color: theme.colorScheme.surfaceContainerHighest,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Text(
+        '$statusStr  |  $conn  |  $phrases$errPart',
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: state.status == ConversationStatus.error
+              ? theme.colorScheme.error
+              : theme.colorScheme.onSurfaceVariant,
+          fontFamily: 'monospace',
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+}
 
 class _LanguageStatusLabel extends StatelessWidget {
   const _LanguageStatusLabel({
@@ -231,6 +276,18 @@ class _SubtitleLine extends StatelessWidget {
   final String fromLang;
   final String toLang;
 
+  static final _boundary = RegExp(r'[.!?]\s+(?=[A-Z])');
+  static String _mainPart(String t) {
+    final m = _boundary.firstMatch(t);
+    return m == null ? t : t.substring(0, m.start + 1).trim();
+  }
+  static String? _notePart(String t) {
+    final m = _boundary.firstMatch(t);
+    if (m == null) return null;
+    final rest = t.substring(m.start + 1).trim();
+    return rest.isEmpty ? null : rest;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -248,15 +305,26 @@ class _SubtitleLine extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 6),
-          // Translation text — large and clean
+          // Pure translation — large and clean
           Text(
-            text,
+            _mainPart(text),
             style: theme.textTheme.headlineSmall?.copyWith(
               fontWeight: FontWeight.w300,
               height: 1.3,
               color: theme.colorScheme.onSurface,
             ),
           ),
+          // Assistant commentary (if any) — small italic
+          if (_notePart(text) != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              _notePart(text)!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
         ],
       ),
     )
