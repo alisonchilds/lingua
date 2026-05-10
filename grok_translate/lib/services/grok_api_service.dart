@@ -121,29 +121,19 @@ class GrokApiService {
       _send({'type': 'response.cancel'});
     }
 
-    // Delete ALL conversation items — including the VAD-created audio item
-    // that contains the raw user speech — BEFORE injecting our text command.
-    // The server processes WebSocket messages in order, so the deletes arrive
-    // before conversation.item.create. The model then only sees our text
-    // translation instruction with zero prior audio context, which prevents
-    // it from treating the speech as a conversational greeting.
+    // Delete ALL conversation items (including the VAD audio item that
+    // contains the raw speech) before we inject anything. The server
+    // processes WebSocket messages in order, so the deletes arrive first.
     clearConversationHistory();
 
-    // Use a sensible fallback when the source language hasn't been detected
-    // yet so the instruction reads grammatically ("from the input language").
     final effectiveFrom =
         fromLanguage.isEmpty ? 'the input language' : fromLanguage;
 
-    // In subtitles mode ask the model to self-report the source language as a
-    // LANG:[iso_code] prefix on the first line. The controller strips this
-    // before displaying and uses it to update the detected-language label.
-    final langPrefixInstruction = textOnly
-        ? 'Start your response with "LANG:[iso_code]\\n" where [iso_code] is '
-            'the ISO-639-1 code of the INPUT text (e.g. LANG:en, LANG:fr). '
-            'Then output the $toLanguage translation on the next line. '
-            'No other text.'
-        : 'Output ONLY the $toLanguage translation. '
-            'No greetings, no assistance, no conversation, no commentary.';
+    // Inject few-shot example pairs that demonstrate the exact expected
+    // behaviour. The model's voice-assistant training is too strong to
+    // override with instructions alone — seeing concrete examples of
+    // "greeting in → translation out" is far more reliable.
+    _injectFewShotExamples(toLanguage: toLanguage, textOnly: textOnly);
 
     _send({
       'type': 'conversation.item.create',
@@ -153,25 +143,77 @@ class GrokApiService {
         'content': [
           {
             'type': 'input_text',
-            'text': '[TEXT_TO_TRANSLATE from $effectiveFrom into $toLanguage]\n'
-                '"$transcript"\n'
-                '[/TEXT_TO_TRANSLATE]\n'
-                '$langPrefixInstruction',
+            'text': '[TRANSLATE into $toLanguage]: "$transcript"',
           }
         ],
       },
     });
 
+    // In subtitles mode ask the model to prepend LANG:[iso_code] so the
+    // controller can update the detected-language label without relying on
+    // xAI's STT language field (which is currently always empty).
+    final responseInstruction = textOnly
+        ? 'Output the $toLanguage translation. '
+            'Prefix it with "LANG:[iso_code]\\n" '
+            '(ISO-639-1 code of the INPUT language, e.g. LANG:de). '
+            'No other text.'
+        : 'Output ONLY the $toLanguage translation. No other text.';
+
     _send({
       'type': 'response.create',
       'response': {
         'modalities': textOnly ? ['text'] : ['audio', 'text'],
-        'instructions': 'You are a pure translation engine. '
-            'Translate the [TEXT_TO_TRANSLATE] block from $effectiveFrom '
-            'into $toLanguage. '
-            '$langPrefixInstruction',
+        'instructions': responseInstruction,
       },
     });
+  }
+
+  /// Inject synthetic example translation pairs immediately before each real
+  /// request so the model has concrete demonstrations of the expected format.
+  ///
+  /// The voice model's assistant training overrides instruction-only prompts
+  /// when it detects greetings. Few-shot examples at the conversation level
+  /// are far more reliable: the model pattern-matches "translate X → Y" and
+  /// follows the template rather than defaulting to assistant mode.
+  void _injectFewShotExamples({
+    required String toLanguage,
+    required bool textOnly,
+  }) {
+    // Two examples covering different source languages. The assistant
+    // messages use the same LANG: prefix format we expect in real responses.
+    final examples = [
+      (
+        user: '[TRANSLATE into $toLanguage]: "Guten Tag"',
+        assistant: textOnly ? 'LANG:de\nGood day' : 'Good day',
+      ),
+      (
+        user: '[TRANSLATE into $toLanguage]: "Buenos días, ¿cómo estás?"',
+        assistant: textOnly ? 'LANG:es\nGood morning, how are you?' : 'Good morning, how are you?',
+      ),
+    ];
+
+    for (final ex in examples) {
+      _send({
+        'type': 'conversation.item.create',
+        'item': {
+          'type': 'message',
+          'role': 'user',
+          'content': [
+            {'type': 'input_text', 'text': ex.user}
+          ],
+        },
+      });
+      _send({
+        'type': 'conversation.item.create',
+        'item': {
+          'type': 'message',
+          'role': 'assistant',
+          'content': [
+            {'type': 'text', 'text': ex.assistant}
+          ],
+        },
+      });
+    }
   }
 
   /// Delete every tracked conversation item from the server's history.
