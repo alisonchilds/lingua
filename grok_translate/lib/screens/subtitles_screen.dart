@@ -22,7 +22,11 @@ class _SubtitlesScreenState extends ConsumerState<SubtitlesScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(conversationControllerProvider.notifier).startSession();
+      final ctrl = ref.read(conversationControllerProvider.notifier);
+      // Always ensure subtitles mode — covers direct URL loads and page refresh
+      // where the setup screen's setAppMode() was never called.
+      ctrl.setAppMode(AppMode.subtitles);
+      ctrl.startSession();
     });
   }
 

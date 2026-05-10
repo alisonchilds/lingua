@@ -103,6 +103,10 @@ class SttService {
         onError: (e) {
           _log.e('STT WebSocket error: $e');
           _setConnected(false);
+          if (_autoReconnect && !_disposed) {
+            _log.i('STT reconnecting after stream error…');
+            Future.delayed(const Duration(milliseconds: 500), _openConnection);
+          }
         },
         onDone: () {
           _log.w('STT utterance complete — connection closed.');
