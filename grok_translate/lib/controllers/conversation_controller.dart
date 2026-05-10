@@ -309,12 +309,14 @@ class ConversationController extends StateNotifier<ConversationState> {
                 '')
             .trim();
         final isSubtitlesMode = state.appMode == AppMode.subtitles;
-        // Skip duplicate transcriptions — VAD sometimes fires multiple
-        // events for the same audio segment, which causes doubled output
-        // (e.g. "Guten Tag Guten Tag" → "Good day. Good day.").
-        final alreadyInAccumulator =
-            _transcriptAccumulator.toString().trim() == rawText ||
-            _transcriptAccumulator.toString().trim().endsWith(rawText);
+        // Skip duplicate/overlapping transcriptions — VAD sometimes fires
+        // multiple events for the same segment (exact match) or successive
+        // events where the second transcript is a longer version of the first
+        // (contains check), e.g. "Come" then "Come ce va".
+        final accumulated = _transcriptAccumulator.toString().trim();
+        final alreadyInAccumulator = accumulated == rawText ||
+            accumulated.endsWith(rawText) ||
+            rawText.contains(accumulated) && accumulated.isNotEmpty;
         if (rawText.isNotEmpty &&
             !alreadyInAccumulator &&
             (!_translationInFlight || isSubtitlesMode)) {

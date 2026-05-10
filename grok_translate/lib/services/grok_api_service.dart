@@ -159,22 +159,25 @@ class GrokApiService {
     required String transcript,
     required String toLanguage,
   }) {
-    // Few-shot examples for subtitles mode: diverse source languages,
-    // LANG:[code] prefix so the controller can update the language label,
-    // plain translation on the second line. If input is unclear the model
-    // should still output something rather than asking for clarification.
+    // Critical: examples MUST include a question being translated (not answered).
+    // The model's training makes it want to ANSWER "How are you?" — examples
+    // that demonstrate translation of questions override that instinct.
     _injectExamples([
       (
         user:  'SUBTITLE_TASK | target=$toLanguage\nINPUT: "Guten Tag"',
         reply: 'LANG:de\nGood day',
       ),
       (
-        user:  'SUBTITLE_TASK | target=$toLanguage\nINPUT: "Buenos días, ¿cómo estás?"',
-        reply: 'LANG:es\nGood morning, how are you?',
+        user:  'SUBTITLE_TASK | target=$toLanguage\nINPUT: "Come ce va?"',
+        reply: 'LANG:it\nHow\'s it going?',
       ),
       (
-        user:  'SUBTITLE_TASK | target=$toLanguage\nINPUT: "Ciao, come stai?"',
-        reply: 'LANG:it\nHi, how are you?',
+        user:  'SUBTITLE_TASK | target=$toLanguage\nINPUT: "¿Cómo estás?"',
+        reply: 'LANG:es\nHow are you?',
+      ),
+      (
+        user:  'SUBTITLE_TASK | target=$toLanguage\nINPUT: "Où allez-vous?"',
+        reply: 'LANG:fr\nWhere are you going?',
       ),
     ]);
 
@@ -199,9 +202,11 @@ class GrokApiService {
       'response': {
         'modalities': ['text'],
         'instructions':
-            'You are a subtitle translation machine. '
-            'Output ONLY: first line LANG:[iso_code], second line the $toLanguage translation. '
-            'No markers, no "end", no extra words. Just those two lines.',
+            'Translate. Output two lines only: LANG:[iso_code] then the $toLanguage translation. '
+            'CRITICAL: If the input is a question ("How are you?", "Come ce va?", etc.) '
+            'TRANSLATE it into $toLanguage — do NOT answer it. '
+            'Never add "How about you?", "I\'m doing well", or any response of your own. '
+            'No extra words, no markers.',
       },
     });
   }
@@ -449,6 +454,7 @@ YOU MUST FOLLOW THESE RULES WITH ZERO EXCEPTIONS:
 - Keep output concise and subtitle-friendly (short lines, natural phrasing).
 - Preserve meaning, tone, and intent as accurately as possible.
 - If the input is already $targetLang, output the cleaned-up $targetLang version (no change unless it improves clarity for subtitles).
+- If the input is a QUESTION ("How are you?", "Come ce va?", "¿Cómo estás?", etc.) TRANSLATE it into $targetLang — do NOT answer it. Output the translated question, never a reply.
 - If speech is unclear, output the best possible translation you can hear — still with zero extra words.
 - NEVER break character. The moment you output anything except clean translated $targetLang text, you have failed.
 
