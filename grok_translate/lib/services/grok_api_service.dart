@@ -117,13 +117,33 @@ class GrokApiService {
     required String toLanguage,
     bool textOnly = false,
   }) {
-    // In audio (translator) mode, cancel any response Grok may have
-    // auto-started due to barge-in or mic echo. Not needed in text-only
-    // (subtitles) mode — create_response is false so there is never an
-    // active response to cancel.
     if (!textOnly) {
       _send({'type': 'response.cancel'});
     }
+
+    // Delete ALL conversation items — including the VAD-created audio item
+    // that contains the raw user speech — BEFORE injecting our text command.
+    // The server processes WebSocket messages in order, so the deletes arrive
+    // before conversation.item.create. The model then only sees our text
+    // translation instruction with zero prior audio context, which prevents
+    // it from treating the speech as a conversational greeting.
+    clearConversationHistory();
+
+    // Use a sensible fallback when the source language hasn't been detected
+    // yet so the instruction reads grammatically ("from the input language").
+    final effectiveFrom =
+        fromLanguage.isEmpty ? 'the input language' : fromLanguage;
+
+    // In subtitles mode ask the model to self-report the source language as a
+    // LANG:[iso_code] prefix on the first line. The controller strips this
+    // before displaying and uses it to update the detected-language label.
+    final langPrefixInstruction = textOnly
+        ? 'Start your response with "LANG:[iso_code]\\n" where [iso_code] is '
+            'the ISO-639-1 code of the INPUT text (e.g. LANG:en, LANG:fr). '
+            'Then output the $toLanguage translation on the next line. '
+            'No other text.'
+        : 'Output ONLY the $toLanguage translation. '
+            'No greetings, no assistance, no conversation, no commentary.';
 
     _send({
       'type': 'conversation.item.create',
@@ -133,11 +153,10 @@ class GrokApiService {
         'content': [
           {
             'type': 'input_text',
-            'text': '[TEXT_TO_TRANSLATE from $fromLanguage into $toLanguage]\n'
+            'text': '[TEXT_TO_TRANSLATE from $effectiveFrom into $toLanguage]\n'
                 '"$transcript"\n'
                 '[/TEXT_TO_TRANSLATE]\n'
-                'Output ONLY the $toLanguage translation. '
-                'Do not answer, comment, or add anything else.',
+                '$langPrefixInstruction',
           }
         ],
       },
@@ -147,12 +166,10 @@ class GrokApiService {
       'type': 'response.create',
       'response': {
         'modalities': textOnly ? ['text'] : ['audio', 'text'],
-        // Per-response instruction override on top of the session prompt.
         'instructions': 'You are a pure translation engine. '
-            'Translate the [TEXT_TO_TRANSLATE] block from $fromLanguage '
+            'Translate the [TEXT_TO_TRANSLATE] block from $effectiveFrom '
             'into $toLanguage. '
-            'Output ONLY the $toLanguage translation. '
-            'No greetings, no assistance, no conversation, no commentary.',
+            '$langPrefixInstruction',
       },
     });
   }

@@ -359,8 +359,14 @@ class ConversationController extends StateNotifier<ConversationState> {
       case GrokServerEventType.responseTextDelta:
         if (event.transcriptDelta != null) {
           _transcriptBuffer.write(event.transcriptDelta);
-          state = state.copyWith(
-              partialTranscript: _transcriptBuffer.toString());
+          // Don't show the LANG: prefix line in the streaming preview.
+          final raw = _transcriptBuffer.toString();
+          final visible = raw.startsWith('LANG:')
+              ? raw.contains('\n')
+                  ? raw.substring(raw.indexOf('\n') + 1)
+                  : ''
+              : raw;
+          state = state.copyWith(partialTranscript: visible);
         }
         break;
 
@@ -414,13 +420,26 @@ class ConversationController extends StateNotifier<ConversationState> {
   }
 
   void _addMessage(String translatedText) {
-    // Use the speaker/language that _triggerTranslation set before this response
     final speaker = _pendingSpeaker ?? Speaker.user1;
     final from = _pendingFrom ?? (state.languageConfig?.lang1Name ?? 'Language 1');
     final to = _pendingTo ?? (state.languageConfig?.lang2Name ?? 'Language 2');
 
+    // Extract LANG:[code] prefix that the model adds in subtitles mode so
+    // we can update the detected-language label even though xAI's STT API
+    // doesn't include language detection in transcription events.
+    String textForSanitization = translatedText;
+    final langPrefix = RegExp(r'^LANG:([a-zA-Z]{2,3})\s*\n', multiLine: false);
+    final langMatch = langPrefix.firstMatch(translatedText.trimLeft());
+    if (langMatch != null) {
+      final isoCode = langMatch.group(1)!.toLowerCase();
+      if (state.detectedLang1 == null) {
+        _updateDetectedLanguage(isoCode);
+      }
+      textForSanitization = translatedText.substring(langMatch.end).trimLeft();
+    }
+
     // Strip any framing tags the model may accidentally echo back.
-    final sanitized = _sanitizeTranslation(translatedText);
+    final sanitized = _sanitizeTranslation(textForSanitization);
 
     final msg = TranslationMessage(
       id: _uuid.v4(),
