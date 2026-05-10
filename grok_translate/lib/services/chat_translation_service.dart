@@ -15,7 +15,7 @@ class ChatTranslationService {
   static const _proxyUrl = '${_workerBase}/translate';
   static const _workerBase = 'https://grok-voice-proxy.alison-ade.workers.dev';
   static const _directUrl = 'https://api.x.ai/v1/chat/completions';
-  static const _model = 'grok-3-fast-beta';
+  static const _model = 'grok-4.3';
 
   final Logger _log = Logger(printer: PrettyPrinter(methodCount: 0));
   String? _apiKey;
