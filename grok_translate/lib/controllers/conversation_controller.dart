@@ -231,14 +231,8 @@ class ConversationController extends StateNotifier<ConversationState> {
     _sttSub = _stt.transcripts.listen((event) async {
       if (event.text.isEmpty) return;
 
-      if (!event.isFinal) {
-        // Partial: show live caption while the speaker is still talking
-        state = state.copyWith(partialTranscript: event.text);
-        _setStatus(ConversationStatus.translating);
-      }
-
-      if (event.speechFinal) {
-        // Final transcript — clear live preview, translate, add to list
+      if (event.isFinal && event.speechFinal) {
+        // Definitive final transcript — clear live preview, translate, add to list
         state = state.copyWith(partialTranscript: '');
         _setStatus(ConversationStatus.listening);
 
@@ -250,6 +244,11 @@ class ConversationController extends StateNotifier<ConversationState> {
         if (translation != null && translation.isNotEmpty) {
           _addSubtitleMessage(translation, targetLang);
         }
+      } else {
+        // Still in-progress (partial or finalised segment but speech ongoing) —
+        // show as live caption without triggering a translation yet.
+        state = state.copyWith(partialTranscript: event.text);
+        _setStatus(ConversationStatus.translating);
       }
     });
 
