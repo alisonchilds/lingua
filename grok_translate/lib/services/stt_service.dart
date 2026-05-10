@@ -14,6 +14,7 @@ class SttTranscriptEvent {
     required this.text,
     required this.isFinal,
     required this.speechFinal,
+    this.language,
   });
 
   /// The transcript text (may be partial).
@@ -24,6 +25,9 @@ class SttTranscriptEvent {
 
   /// True when the speaker has paused / stopped — use to trigger translation.
   final bool speechFinal;
+
+  /// ISO-639-1 language code detected by the STT API, if provided.
+  final String? language;
 }
 
 /// Streams real-time partial and final transcripts from the xAI STT API.
@@ -183,6 +187,7 @@ class SttService {
                     ?.cast<String, dynamic>()['text'] as String? ??
                 '')
             .trim();
+        final language = json['language'] as String?;
         if (text.isNotEmpty && !_finalEmitted) {
           _finalEmitted = true;
           _log.i('STT transcript.done — emitting final: "$text"');
@@ -191,6 +196,7 @@ class SttService {
               text: text,
               isFinal: true,
               speechFinal: true,
+              language: language,
             ));
           }
         }
@@ -202,6 +208,7 @@ class SttService {
         final text = json['text'] as String? ?? '';
         final isFinal = json['is_final'] as bool? ?? false;
         final speechFinal = json['speech_final'] as bool? ?? false;
+        final language = json['language'] as String?;
 
         if (text.isNotEmpty) {
           if (isFinal) _finalEmitted = true; // suppress duplicate from transcript.done
@@ -209,6 +216,7 @@ class SttService {
             text: text,
             isFinal: isFinal,
             speechFinal: speechFinal,
+            language: language,
           );
           if (!_transcriptController.isClosed) {
             _transcriptController.add(event);

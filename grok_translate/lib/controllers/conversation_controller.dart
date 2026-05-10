@@ -129,13 +129,11 @@ class ConversationController extends StateNotifier<ConversationState> {
   Timer? _transcriptDebounce;
   final StringBuffer _transcriptAccumulator = StringBuffer();
 
-  // Subtitles mode: true once a speechFinal event has been received for the
-  // current utterance. Cleared when isFinal fires (triggering translation) or
-  // when a new non-final partial arrives (next utterance started).
-  bool _sttSpeechEnded = false;
-  // Prevents a second translation firing for the same utterance when the STT
-  // emits multiple final events (e.g. transcript.partial + transcript.done).
-  bool _sttTranslationInFlight = false;
+  // Subtitles mode debounce: fires one translation after all final/speechFinal
+  // events for an utterance have settled (avoids duplicate translations when
+  // the STT sends the two flags in separate events or via transcript.done).
+  Timer? _sttDebounce;
+  String? _sttBestTranscript; // most accurate transcript seen so far
 
   void _init() {
     final langCfg = _prefs.getLanguageConfig();
@@ -236,40 +234,45 @@ class ConversationController extends StateNotifier<ConversationState> {
         ? (state.languageConfig!.lang2Name)
         : 'English';
 
-    _sttSub = _stt.transcripts.listen((event) async {
+    _sttSub = _stt.transcripts.listen((event) {
       if (event.text.isEmpty) return;
 
       if (!event.speechFinal && !event.isFinal) {
-        // Ordinary partial — new utterance in progress, reset end-of-speech flag.
-        _sttSpeechEnded = false;
+        // Ongoing partial — cancel any pending translation, show live caption.
+        _sttDebounce?.cancel();
+        _sttBestTranscript = null;
         state = state.copyWith(partialTranscript: event.text);
         _setStatus(ConversationStatus.translating);
         return;
       }
 
-      // Record that the speaker has stopped.
-      if (event.speechFinal) {
-        _sttSpeechEnded = true;
+      // Keep the most accurate transcript seen so far (prefer isFinal text).
+      if (event.isFinal || _sttBestTranscript == null) {
+        _sttBestTranscript = event.text;
       }
 
-      // Translate once we have the locked-in transcript AND speech has ended.
-      // The two conditions may arrive in either order or in a single event.
-      if (_sttSpeechEnded && event.isFinal && !_sttTranslationInFlight) {
-        _sttSpeechEnded = false; // consumed — ready for the next utterance
-        _sttTranslationInFlight = true;
+      // Pick up language detection when the STT API provides it.
+      if (event.language != null) {
+        _updateDetectedLanguage(event.language!);
+      }
+
+      // Debounce: collect all final/speechFinal events for this utterance
+      // then fire exactly one translation call.
+      _sttDebounce?.cancel();
+      _sttDebounce = Timer(const Duration(milliseconds: 400), () async {
+        final transcript = (_sttBestTranscript ?? '').trim();
+        _sttBestTranscript = null;
+        if (transcript.isEmpty) return;
+
         state = state.copyWith(partialTranscript: '');
         _setStatus(ConversationStatus.listening);
 
-        final transcript = event.text.trim();
-        if (transcript.isNotEmpty) {
-          _log.i('[STT final] "$transcript" → $targetLang');
-          final translation = await _translate.translate(transcript, targetLang);
-          if (translation != null && translation.isNotEmpty) {
-            _addSubtitleMessage(translation, targetLang);
-          }
+        _log.i('[STT] "$transcript" → $targetLang');
+        final translation = await _translate.translate(transcript, targetLang);
+        if (translation != null && translation.isNotEmpty) {
+          _addSubtitleMessage(translation, targetLang);
         }
-        _sttTranslationInFlight = false;
-      }
+      });
     });
 
     _log.i('Subtitles session started (STT streaming).');
@@ -313,6 +316,8 @@ class ConversationController extends StateNotifier<ConversationState> {
   /// End the translation session and release resources.
   Future<void> endSession() async {
     _pendingSessionReady = false;
+    _sttDebounce?.cancel();
+    _sttBestTranscript = null;
     // Translator mode subscriptions
     await _micSub?.cancel();
     _micSub = null;
@@ -788,6 +793,7 @@ class ConversationController extends StateNotifier<ConversationState> {
   @override
   void dispose() {
     _transcriptDebounce?.cancel();
+    _sttDebounce?.cancel();
     _apiEventSub?.cancel();
     _micSub?.cancel();
     _sttSub?.cancel();

@@ -31,18 +31,11 @@ class ChatTranslationService {
       'model': _model,
       'messages': [
         {
-          'role': 'system',
-          'content':
-              'You are a translation engine. '
-              'Output ONLY the translated text. '
-              'Never explain, comment, or add any extra words.',
-        },
-        {
           'role': 'user',
           'content':
-              'Translate the text inside <t> tags into $targetLanguage. '
-              'Reply with the translation only — no tags, no commentary.\n'
-              '<t>$text</t>',
+              'Translate into $targetLanguage. '
+              'Reply with the translation only — no commentary, no extra sentences.\n\n'
+              '$text',
         },
       ],
       'temperature': 0,
@@ -60,13 +53,9 @@ class ChatTranslationService {
 
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body) as Map<String, dynamic>;
-        var content = (json['choices'] as List?)
+        final content = (json['choices'] as List?)
             ?.firstOrNull?['message']?['content'] as String?;
-        // Strip any <t>…</t> tags the model may accidentally echo.
-        content = content
-            ?.replaceAll(RegExp(r'</?t>'), '')
-            .trim();
-        return content;
+        return content?.trim();
       } else {
         _log.e('Translation API error ${response.statusCode}: ${response.body}');
         return null;
