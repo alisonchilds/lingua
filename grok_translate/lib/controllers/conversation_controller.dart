@@ -556,6 +556,8 @@ class ConversationController extends StateNotifier<ConversationState> {
     var cleaned = text;
     // Fallback LANG: strip in case _addMessage() didn't catch it
     cleaned = cleaned.replaceAll(RegExp(r'^LANG:[a-zA-Z]{2,3}\s+', multiLine: false), '');
+    // Strip trailing "end" / "END" markers the model sometimes appends
+    cleaned = cleaned.replaceAll(RegExp(r'\s+[Ee][Nn][Dd]\s*$'), '');
     // Strip any injected task-header lines the model might parrot back
     cleaned = cleaned.replaceAll(RegExp(r'^SUBTITLE_TASK\s*\|[^\n]*\n?', multiLine: true), '');
     cleaned = cleaned.replaceAll(RegExp(r'^TRANSLATE\s*\|[^\n]*\n?', multiLine: true), '');
