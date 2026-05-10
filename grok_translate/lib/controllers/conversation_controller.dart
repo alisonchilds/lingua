@@ -518,15 +518,17 @@ class ConversationController extends StateNotifier<ConversationState> {
     );
   }
 
-  /// Remove any framing the model may echo back verbatim.
+  /// Remove any prompt framing the model may echo back verbatim.
   String _sanitizeTranslation(String text) {
     var cleaned = text;
-    // Old [TEXT_TO_TRANSLATE ...] tags (kept for safety)
+    // Strip any injected task-header lines the model might parrot back
+    cleaned = cleaned.replaceAll(RegExp(r'^SUBTITLE_TASK\s*\|[^\n]*\n?', multiLine: true), '');
+    cleaned = cleaned.replaceAll(RegExp(r'^TRANSLATE\s*\|[^\n]*\n?', multiLine: true), '');
+    cleaned = cleaned.replaceAll(RegExp(r'^INPUT:\s*', multiLine: true), '');
+    // Old [TEXT_TO_TRANSLATE ...] tags
     cleaned = cleaned.replaceAll(RegExp(r'\[TEXT_TO_TRANSLATE[^\]]*\]'), '');
     cleaned = cleaned.replaceAll(RegExp(r'\[/TEXT_TO_TRANSLATE\]'), '');
-    // New [TRANSLATE into ...]: prefix
-    cleaned = cleaned.replaceAll(RegExp(r'^\[TRANSLATE[^\]]*\]:\s*', multiLine: true), '');
-    // Strip surrounding quotes the model may preserve from the framing
+    // Strip surrounding quotes
     cleaned = cleaned.trim();
     if (cleaned.startsWith('"') && cleaned.endsWith('"') && cleaned.length >= 2) {
       cleaned = cleaned.substring(1, cleaned.length - 1).trim();

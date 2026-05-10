@@ -121,19 +121,54 @@ class GrokApiService {
       _send({'type': 'response.cancel'});
     }
 
-    // Delete ALL conversation items (including the VAD audio item that
-    // contains the raw speech) before we inject anything. The server
-    // processes WebSocket messages in order, so the deletes arrive first.
+    // Delete ALL conversation items (including the VAD audio item) before
+    // injecting anything. Server processes messages in order so deletes
+    // arrive first — the model then only sees our injected content.
     clearConversationHistory();
 
     final effectiveFrom =
         fromLanguage.isEmpty ? 'the input language' : fromLanguage;
 
-    // Inject few-shot example pairs that demonstrate the exact expected
-    // behaviour. The model's voice-assistant training is too strong to
-    // override with instructions alone — seeing concrete examples of
-    // "greeting in → translation out" is far more reliable.
-    _injectFewShotExamples(toLanguage: toLanguage, textOnly: textOnly);
+    if (textOnly) {
+      _requestSubtitlesTranslation(
+        transcript: transcript,
+        toLanguage: toLanguage,
+      );
+    } else {
+      _requestVoiceTranslation(
+        transcript: transcript,
+        fromLanguage: effectiveFrom,
+        toLanguage: toLanguage,
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Subtitles mode — text output, one-way translation, LANG: detection prefix
+  // ---------------------------------------------------------------------------
+
+  void _requestSubtitlesTranslation({
+    required String transcript,
+    required String toLanguage,
+  }) {
+    // Few-shot examples for subtitles mode: diverse source languages,
+    // LANG:[code] prefix so the controller can update the language label,
+    // plain translation on the second line. If input is unclear the model
+    // should still output something rather than asking for clarification.
+    _injectExamples([
+      (
+        user:  'SUBTITLE_TASK | target=$toLanguage\nINPUT: "Guten Tag"',
+        reply: 'LANG:de\nGood day',
+      ),
+      (
+        user:  'SUBTITLE_TASK | target=$toLanguage\nINPUT: "Buenos días, ¿cómo estás?"',
+        reply: 'LANG:es\nGood morning, how are you?',
+      ),
+      (
+        user:  'SUBTITLE_TASK | target=$toLanguage\nINPUT: "Ciao, come stai?"',
+        reply: 'LANG:it\nHi, how are you?',
+      ),
+    ]);
 
     _send({
       'type': 'conversation.item.create',
@@ -143,55 +178,85 @@ class GrokApiService {
         'content': [
           {
             'type': 'input_text',
-            'text': '[TRANSLATE into $toLanguage]: "$transcript"',
+            'text': 'SUBTITLE_TASK | target=$toLanguage\nINPUT: "$transcript"',
           }
         ],
       },
     });
 
-    // In subtitles mode ask the model to prepend LANG:[iso_code] so the
-    // controller can update the detected-language label without relying on
-    // xAI's STT language field (which is currently always empty).
-    final responseInstruction = textOnly
-        ? 'Output the $toLanguage translation. '
-            'Prefix it with "LANG:[iso_code]\\n" '
-            '(ISO-639-1 code of the INPUT language, e.g. LANG:de). '
-            'No other text.'
-        : 'Output ONLY the $toLanguage translation. No other text.';
-
     _send({
       'type': 'response.create',
       'response': {
-        'modalities': textOnly ? ['text'] : ['audio', 'text'],
-        'instructions': responseInstruction,
+        'modalities': ['text'],
+        'instructions':
+            'You are a subtitle translation machine. '
+            'For every SUBTITLE_TASK message output exactly two lines:\n'
+            'Line 1: LANG:[iso_code]  (ISO-639-1 code of the INPUT language)\n'
+            'Line 2: The $toLanguage translation of the input text.\n'
+            'Rules: No greetings. No explanations. No apologies. '
+            'If the input is unclear or poorly transcribed, output your best '
+            'attempt at a translation — never ask for clarification. '
+            'Two lines only.',
       },
     });
   }
 
-  /// Inject synthetic example translation pairs immediately before each real
-  /// request so the model has concrete demonstrations of the expected format.
-  ///
-  /// The voice model's assistant training overrides instruction-only prompts
-  /// when it detects greetings. Few-shot examples at the conversation level
-  /// are far more reliable: the model pattern-matches "translate X → Y" and
-  /// follows the template rather than defaulting to assistant mode.
-  void _injectFewShotExamples({
-    required String toLanguage,
-    required bool textOnly,
-  }) {
-    // Two examples covering different source languages. The assistant
-    // messages use the same LANG: prefix format we expect in real responses.
-    final examples = [
-      (
-        user: '[TRANSLATE into $toLanguage]: "Guten Tag"',
-        assistant: textOnly ? 'LANG:de\nGood day' : 'Good day',
-      ),
-      (
-        user: '[TRANSLATE into $toLanguage]: "Buenos días, ¿cómo estás?"',
-        assistant: textOnly ? 'LANG:es\nGood morning, how are you?' : 'Good morning, how are you?',
-      ),
-    ];
+  // ---------------------------------------------------------------------------
+  // Translator mode — voice output, bidirectional, no LANG: prefix needed
+  // ---------------------------------------------------------------------------
 
+  void _requestVoiceTranslation({
+    required String transcript,
+    required String fromLanguage,
+    required String toLanguage,
+  }) {
+    _injectExamples([
+      (
+        user:  'TRANSLATE | $fromLanguage → $toLanguage\nINPUT: "Guten Tag"',
+        reply: 'Good day',
+      ),
+      (
+        user:  'TRANSLATE | $fromLanguage → $toLanguage\nINPUT: "How are you doing?"',
+        reply: fromLanguage == toLanguage ? 'How are you doing?' : 'Wie geht es Ihnen?',
+      ),
+    ]);
+
+    _send({
+      'type': 'conversation.item.create',
+      'item': {
+        'type': 'message',
+        'role': 'user',
+        'content': [
+          {
+            'type': 'input_text',
+            'text': 'TRANSLATE | $fromLanguage → $toLanguage\nINPUT: "$transcript"',
+          }
+        ],
+      },
+    });
+
+    _send({
+      'type': 'response.create',
+      'response': {
+        'modalities': ['audio', 'text'],
+        'instructions':
+            'You are a real-time voice interpreter. '
+            'For every TRANSLATE message speak ONLY the $toLanguage translation '
+            'of the INPUT text. '
+            'No greetings, no filler, no explanations. '
+            'If the input is unclear, translate your best guess — '
+            'never ask for clarification. '
+            'Speak only the translation.',
+      },
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Shared helper
+  // ---------------------------------------------------------------------------
+
+  void _injectExamples(
+      List<({String user, String reply})> examples) {
     for (final ex in examples) {
       _send({
         'type': 'conversation.item.create',
@@ -209,7 +274,7 @@ class GrokApiService {
           'type': 'message',
           'role': 'assistant',
           'content': [
-            {'type': 'text', 'text': ex.assistant}
+            {'type': 'text', 'text': ex.reply}
           ],
         },
       });
