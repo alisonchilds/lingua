@@ -70,27 +70,13 @@ class _SubtitlesScreenState extends ConsumerState<SubtitlesScreen> {
                   const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
               child: Row(
                 children: [
-                  // Language badges
-                  _LangPill(
-                    label: state.detectedLang1 ??
-                        (state.languageConfig?.autoDetect == false
-                            ? state.languageConfig!.lang1Name
-                            : 'Listening…'),
-                    flag: state.detectedLang1Flag ?? '🎙️',
+                  // Language detection status
+                  Expanded(
+                    child: _LanguageStatusLabel(
+                      detectedLang: state.detectedLang1,
+                      detectedFlag: state.detectedLang1Flag,
+                    ),
                   ),
-                  const SizedBox(width: 8),
-                  Icon(Icons.arrow_forward,
-                      size: 14,
-                      color: theme.colorScheme.onSurfaceVariant),
-                  const SizedBox(width: 8),
-                  _LangPill(
-                    label: state.detectedLang2 ??
-                        (state.languageConfig?.autoDetect == false
-                            ? state.languageConfig!.lang2Name
-                            : 'Auto'),
-                    flag: state.detectedLang2Flag ?? '💬',
-                  ),
-                  const Spacer(),
                   // Mic status dot
                   _StatusDot(status: state.status),
                   const SizedBox(width: 12),
@@ -166,23 +152,46 @@ class _SubtitlesScreenState extends ConsumerState<SubtitlesScreen> {
 
 // ── Sub-widgets ───────────────────────────────────────────────────────────────
 
-class _LangPill extends StatelessWidget {
-  const _LangPill({required this.label, required this.flag});
-  final String label;
-  final String flag;
+class _LanguageStatusLabel extends StatelessWidget {
+  const _LanguageStatusLabel({
+    required this.detectedLang,
+    required this.detectedFlag,
+  });
+  final String? detectedLang;
+  final String? detectedFlag;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
+    final detected = detectedLang != null;
+
+    final label = detected
+        ? 'Language Detected: ${detectedFlag ?? ''} $detectedLang'.trim()
+        : 'Listening\u2026';
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 400),
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0, 0.3),
+            end: Offset.zero,
+          ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOut)),
+          child: child,
+        ),
       ),
-      child: Text('$flag $label',
-          style: theme.textTheme.labelSmall
-              ?.copyWith(fontWeight: FontWeight.w600)),
+      child: Text(
+        label,
+        key: ValueKey(detectedLang),
+        style: theme.textTheme.labelMedium?.copyWith(
+          color: detected
+              ? theme.colorScheme.primary
+              : theme.colorScheme.onSurfaceVariant,
+          fontWeight: detected ? FontWeight.w600 : FontWeight.w400,
+          fontStyle: detected ? FontStyle.normal : FontStyle.italic,
+        ),
+      ),
     );
   }
 }
