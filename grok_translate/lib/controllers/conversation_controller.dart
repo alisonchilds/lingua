@@ -143,9 +143,17 @@ class ConversationController extends StateNotifier<ConversationState> {
 
     // Listen to WebSocket events
     _apiEventSub = _api.events.listen(_handleApiEvent);
-    // Listen to connection status
+    // Realtime API connection (translator mode)
     _connectionSub = _api.connectionStatus.listen((connected) {
-      state = state.copyWith(isConnected: connected);
+      if (state.appMode != AppMode.subtitles) {
+        state = state.copyWith(isConnected: connected);
+      }
+    });
+    // STT connection (subtitles mode)
+    _stt.connectionStatus.listen((connected) {
+      if (state.appMode == AppMode.subtitles) {
+        state = state.copyWith(isConnected: connected);
+      }
     });
     // Listen to playback state to update UI
     _playerSub = _player.playingStream.listen((playing) {
@@ -194,17 +202,25 @@ class ConversationController extends StateNotifier<ConversationState> {
 
   /// Subtitles mode: STT streaming for live captions + REST API for translation.
   Future<void> _startSubtitlesSession(String? apiKey) async {
-    await _stt.connect(apiKey: apiKey);
-
-    // Start mic — raw bytes go directly to the STT WebSocket.
+    // Start mic first so audio is ready when STT connects.
     final micStarted = await _audio.startRecording();
     if (!micStarted) {
       _setError('Microphone permission denied or unavailable.');
       return;
     }
 
-    // Forward raw PCM bytes to STT (not base64 — STT needs binary frames).
-    _sttMicSub = _audio.rawMicBytes?.listen((bytes) {
+    // Connect STT WebSocket (auto-reconnects after each utterance).
+    await _stt.connect(apiKey: apiKey);
+
+    // Forward raw PCM bytes to STT. rawMicBytes is set for both web and
+    // native — if somehow null (shouldn't happen) log a warning.
+    final rawStream = _audio.rawMicBytes;
+    if (rawStream == null) {
+      _log.e('rawMicBytes stream unavailable — subtitles mode cannot function.');
+      _setError('Microphone audio stream unavailable.');
+      return;
+    }
+    _sttMicSub = rawStream.listen((bytes) {
       _stt.sendAudio(bytes);
     });
 

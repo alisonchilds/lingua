@@ -123,8 +123,10 @@ class SttService {
 
   /// Send a raw PCM16 audio chunk to the STT endpoint.
   /// The STT API expects raw binary frames, NOT base64.
+  /// We send as soon as the socket is open — no need to wait for
+  /// transcript.created, the server buffers audio until it's ready.
   void sendAudio(Uint8List bytes) {
-    if (!_connected) return;
+    if (_ws == null) return;
     try {
       _ws?.sendBytes(bytes);
     } catch (e) {
