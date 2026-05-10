@@ -35,14 +35,19 @@ class GrokAudioService {
   final WebMicService _webMic = WebMicService();
 
   final _audioChunkController = StreamController<String>.broadcast();
+  final _rawBytesController = StreamController<Uint8List>.broadcast();
 
   bool _isRecording = false;
   bool _isPlaying = false;
   bool _disposed = false;
 
-  /// Base64-encoded PCM16 chunks from the microphone.
+  /// Base64-encoded PCM16 chunks (for Realtime API — translator mode).
   /// Gated: paused while [_isPlaying] is true.
   Stream<String> get micAudioChunks => _audioChunkController.stream;
+
+  /// Raw PCM16 bytes (for STT streaming API — subtitles mode).
+  /// Not gated by playback since subtitles mode has no audio output.
+  Stream<Uint8List>? get rawMicBytes => _rawBytesController.stream;
 
   bool get isRecording => _isRecording;
   bool get isPlaying => _isPlaying;
@@ -63,8 +68,11 @@ class GrokAudioService {
       return false;
     }
     _micSubscription = _webMic.micStream!.listen((bytes) {
-      if (_disposed || _isPlaying) return;
-      if (!_audioChunkController.isClosed) {
+      if (_disposed) return;
+      if (!_rawBytesController.isClosed) {
+        _rawBytesController.add(bytes);
+      }
+      if (!_isPlaying && !_audioChunkController.isClosed) {
         _audioChunkController.add(base64Encode(bytes));
       }
     });
@@ -88,8 +96,11 @@ class GrokAudioService {
         ),
       );
       _micSubscription = stream.listen((chunk) {
-        if (_disposed || _isPlaying) return;
-        if (!_audioChunkController.isClosed) {
+        if (_disposed) return;
+        if (!_rawBytesController.isClosed) {
+          _rawBytesController.add(chunk);
+        }
+        if (!_isPlaying && !_audioChunkController.isClosed) {
           _audioChunkController.add(base64Encode(chunk));
         }
       }, onError: (e) => _log.e('Mic stream error: $e'));
@@ -165,6 +176,7 @@ class GrokAudioService {
     _disposed = true;
     await stopRecording();
     await _audioChunkController.close();
+    await _rawBytesController.close();
     _recorder.dispose();
   }
 }

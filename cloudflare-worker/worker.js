@@ -35,10 +35,14 @@
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
-// Grok Realtime API endpoint.
-// IMPORTANT: Cloudflare Workers require https:// (not wss://) when calling
-// fetch() to establish an upstream WebSocket — the runtime upgrades it automatically.
+// Grok Realtime API endpoint (translator mode).
 const GROK_API_URL = "https://api.x.ai/v1/realtime?model=grok-voice-think-fast-1.0";
+
+// Grok STT streaming endpoint (subtitles mode — real-time partial transcripts).
+const GROK_STT_BASE = "https://api.x.ai/v1/stt";
+
+// Grok chat completions endpoint (subtitles translation via REST).
+const GROK_CHAT_URL = "https://api.x.ai/v1/chat/completions";
 
 /**
  * Origins allowed to connect to this proxy.
@@ -75,7 +79,93 @@ export default {
       return jsonResponse({ status: "ok", service: "grok-translate-proxy" });
     }
 
-    // ── 3. Only accept WebSocket upgrades beyond this point ───────────────
+    // ── 3. Translation REST proxy (subtitles mode) ─────────────────────────
+    // POST /translate  →  POST https://api.x.ai/v1/chat/completions
+    if (url.pathname === "/translate" && request.method === "POST") {
+      if (!isAllowedOrigin(origin)) {
+        return new Response("Forbidden: origin not allowed", { status: 403 });
+      }
+      if (!env.XAI_API_KEY) {
+        return new Response("Internal Server Error: proxy not configured", { status: 500 });
+      }
+      const body = await request.text();
+      const upstream = await fetch(GROK_CHAT_URL, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${env.XAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body,
+      });
+      const text = await upstream.text();
+      return new Response(text, {
+        status: upstream.status,
+        headers: {
+          "Content-Type": "application/json",
+          ...securityHeaders(origin),
+        },
+      });
+    }
+
+    // ── 4. STT WebSocket proxy (subtitles mode real-time captions) ─────────
+    // GET /stt[?params]  →  wss://api.x.ai/v1/stt[?params]
+    if (url.pathname === "/stt") {
+      if (!isAllowedOrigin(origin)) {
+        return new Response("Forbidden: origin not allowed", { status: 403 });
+      }
+      if (!env.XAI_API_KEY) {
+        return new Response("Internal Server Error: proxy not configured", { status: 500 });
+      }
+      const { 0: clientSocket, 1: serverSide } = new WebSocketPair();
+      serverSide.accept();
+
+      // Forward the query string (sample_rate, encoding, interim_results, etc.)
+      const sttUrl = `${GROK_STT_BASE}${url.search}`;
+      let sttSocket;
+      try {
+        const sttResp = await fetch(sttUrl, {
+          headers: {
+            "Upgrade": "websocket",
+            "Connection": "Upgrade",
+            "Authorization": `Bearer ${env.XAI_API_KEY}`,
+            "Sec-WebSocket-Version": "13",
+          },
+        });
+        if (sttResp.status !== 101) {
+          const body = await sttResp.text();
+          serverSide.close(1011, "STT upstream failed");
+          return new Response(`STT refused: ${sttResp.status} – ${body}`, { status: 502 });
+        }
+        sttSocket = sttResp.webSocket;
+        sttSocket.accept();
+      } catch (err) {
+        serverSide.close(1011, "STT upstream unreachable");
+        return new Response("Bad Gateway", { status: 502 });
+      }
+
+      // Client → STT (binary audio frames)
+      serverSide.addEventListener("message", (evt) => {
+        try { sttSocket.send(evt.data); } catch (_) {}
+      });
+      // STT → Client (JSON transcript events)
+      sttSocket.addEventListener("message", (evt) => {
+        try { serverSide.send(evt.data); } catch (_) {}
+      });
+      serverSide.addEventListener("close", (evt) => {
+        try { sttSocket.close(evt.code, evt.reason); } catch (_) {}
+      });
+      sttSocket.addEventListener("close", (evt) => {
+        try { serverSide.close(evt.code, evt.reason); } catch (_) {}
+      });
+
+      return new Response(null, {
+        status: 101,
+        webSocket: clientSocket,
+        headers: securityHeaders(origin),
+      });
+    }
+
+    // ── 5. Only accept WebSocket upgrades beyond this point ───────────────
     // Cloudflare may deliver requests over HTTP/2 internally, which strips the
     // Upgrade header. Check Sec-WebSocket-Key as a reliable WS indicator too.
     const upgradeHeader = request.headers.get("Upgrade");

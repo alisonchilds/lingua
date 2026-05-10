@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logger/logger.dart';
@@ -10,9 +11,11 @@ import '../models/conversation_models.dart';
 // kSupportedLanguages used for ISO code → display name lookup
 import '../models/grok_api_models.dart';
 import '../services/audio_player_service.dart';
+import '../services/chat_translation_service.dart';
 import '../services/grok_api_service.dart';
 import '../services/grok_audio_service.dart';
 import '../services/preferences_service.dart';
+import '../services/stt_service.dart';
 
 // ---------------------------------------------------------------------------
 // Providers
@@ -40,6 +43,12 @@ final audioPlayerServiceProvider = Provider<AudioPlayerService>((ref) {
   return svc;
 });
 
+final sttServiceProvider = Provider<SttService>((ref) {
+  final svc = SttService();
+  ref.onDispose(svc.dispose);
+  return svc;
+});
+
 /// Main conversation state provider.
 final conversationControllerProvider =
     StateNotifierProvider<ConversationController, ConversationState>((ref) {
@@ -48,6 +57,7 @@ final conversationControllerProvider =
     audioService: ref.watch(grokAudioServiceProvider),
     playerService: ref.watch(audioPlayerServiceProvider),
     prefsService: ref.watch(preferencesServiceProvider),
+    sttService: ref.watch(sttServiceProvider),
   );
 });
 
@@ -70,10 +80,12 @@ class ConversationController extends StateNotifier<ConversationState> {
     required GrokAudioService audioService,
     required AudioPlayerService playerService,
     required PreferencesService prefsService,
+    required SttService sttService,
   })  : _api = apiService,
         _audio = audioService,
         _player = playerService,
         _prefs = prefsService,
+        _stt = sttService,
         super(const ConversationState()) {
     _init();
   }
@@ -82,11 +94,15 @@ class ConversationController extends StateNotifier<ConversationState> {
   final GrokAudioService _audio;
   final AudioPlayerService _player;
   final PreferencesService _prefs;
+  final SttService _stt;
+  final _translate = ChatTranslationService();
   final Logger _log = Logger(printer: PrettyPrinter(methodCount: 0));
   final _uuid = const Uuid();
 
   StreamSubscription? _apiEventSub;
   StreamSubscription? _micSub;
+  StreamSubscription? _sttSub;       // STT transcript stream (subtitles mode)
+  StreamSubscription? _sttMicSub;    // raw bytes → STT (subtitles mode)
   StreamSubscription? _connectionSub;
   StreamSubscription? _playerSub;
 
@@ -154,33 +170,13 @@ class ConversationController extends StateNotifier<ConversationState> {
   /// On web the Cloudflare Worker proxy holds the API key, so no key is needed
   /// from the user. On native (iOS/Android) a key must be stored in Settings.
   Future<void> startSession({String? apiKey}) async {
-    // Web: proxy handles auth — skip the key check entirely.
-    // Native: require a locally stored key for the direct Authorization header.
     final key = apiKey ?? _prefs.getApiKey();
     if (!kIsWeb && (key == null || key.isEmpty)) {
       _setError('API key not configured. Please enter it in Settings.');
       return;
     }
 
-    final langCfg = state.languageConfig ?? const LanguageConfig();
-    final vadSettings = VadSettings(
-      threshold: state.vadThreshold,
-      silenceDurationMs: state.vadSilenceDurationMs,
-    );
-
-    // Connect to Grok API
-    await _api.connect(
-      apiKey: key,
-      languageConfig: langCfg,
-      vadSettings: vadSettings,
-      appMode: state.appMode,
-    );
-
-    // Mic is started in _onSessionReady() once session.updated is received.
-    // This prevents audio reaching the server while it still has default
-    // (assistant) settings — the window between WebSocket open and
-    // session.update being processed can cause unwanted auto-responses.
-    _pendingSessionReady = true;
+    _translate.setApiKey(key);
 
     state = state.copyWith(
       isSessionActive: true,
@@ -188,14 +184,110 @@ class ConversationController extends StateNotifier<ConversationState> {
       messages: [],
     );
     _setStatus(ConversationStatus.listening);
-    _log.i('Session started — waiting for session.updated before mic.');
+
+    if (state.appMode == AppMode.subtitles) {
+      await _startSubtitlesSession(key);
+    } else {
+      await _startTranslatorSession(key);
+    }
+  }
+
+  /// Subtitles mode: STT streaming for live captions + REST API for translation.
+  Future<void> _startSubtitlesSession(String? apiKey) async {
+    await _stt.connect(apiKey: apiKey);
+
+    // Start mic — raw bytes go directly to the STT WebSocket.
+    final micStarted = await _audio.startRecording();
+    if (!micStarted) {
+      _setError('Microphone permission denied or unavailable.');
+      return;
+    }
+
+    // Forward raw PCM bytes to STT (not base64 — STT needs binary frames).
+    _sttMicSub = _audio.rawMicBytes?.listen((bytes) {
+      _stt.sendAudio(bytes);
+    });
+
+    final targetLang = (state.languageConfig?.autoDetect == false)
+        ? (state.languageConfig!.lang2Name)
+        : 'English';
+
+    _sttSub = _stt.transcripts.listen((event) async {
+      if (event.text.isEmpty) return;
+
+      if (!event.isFinal) {
+        // Partial: show live caption while the speaker is still talking
+        state = state.copyWith(partialTranscript: event.text);
+        _setStatus(ConversationStatus.translating);
+      }
+
+      if (event.speechFinal) {
+        // Final transcript — clear live preview, translate, add to list
+        state = state.copyWith(partialTranscript: '');
+        _setStatus(ConversationStatus.listening);
+
+        final transcript = event.text.trim();
+        if (transcript.isEmpty) return;
+
+        _log.i('[STT final] "$transcript" → $targetLang');
+        final translation = await _translate.translate(transcript, targetLang);
+        if (translation != null && translation.isNotEmpty) {
+          _addSubtitleMessage(translation, targetLang);
+        }
+      }
+    });
+
+    _log.i('Subtitles session started (STT streaming).');
+  }
+
+  /// Translator mode: Realtime API with manual injection.
+  Future<void> _startTranslatorSession(String? apiKey) async {
+    final langCfg = state.languageConfig ?? const LanguageConfig();
+    final vadSettings = VadSettings(
+      threshold: state.vadThreshold,
+      silenceDurationMs: state.vadSilenceDurationMs,
+    );
+
+    await _api.connect(
+      apiKey: apiKey,
+      languageConfig: langCfg,
+      vadSettings: vadSettings,
+      appMode: state.appMode,
+    );
+
+    // Mic is started in _onSessionReady() once session.updated is received.
+    _pendingSessionReady = true;
+    _log.i('Translator session started — waiting for session.updated before mic.');
+  }
+
+  void _addSubtitleMessage(String translatedText, String toLang) {
+    final sanitized = _sanitizeTranslation(translatedText);
+    if (sanitized.isEmpty) return;
+    final msg = TranslationMessage(
+      id: _uuid.v4(),
+      speaker: Speaker.user1,
+      originalText: '',
+      translatedText: sanitized,
+      fromLanguage: state.detectedLang1 ?? '',
+      toLanguage: toLang,
+      timestamp: DateTime.now(),
+    );
+    state = state.copyWith(messages: [...state.messages, msg]);
   }
 
   /// End the translation session and release resources.
   Future<void> endSession() async {
     _pendingSessionReady = false;
+    // Translator mode subscriptions
     await _micSub?.cancel();
     _micSub = null;
+    // Subtitles mode subscriptions
+    await _sttSub?.cancel();
+    _sttSub = null;
+    await _sttMicSub?.cancel();
+    _sttMicSub = null;
+    await _stt.disconnect();
+
     await _audio.stopRecording();
     await _api.disconnect();
     await _player.stop();
@@ -663,6 +755,8 @@ class ConversationController extends StateNotifier<ConversationState> {
     _transcriptDebounce?.cancel();
     _apiEventSub?.cancel();
     _micSub?.cancel();
+    _sttSub?.cancel();
+    _sttMicSub?.cancel();
     _connectionSub?.cancel();
     _playerSub?.cancel();
     super.dispose();

@@ -4,6 +4,7 @@
 
 import 'dart:async';
 import 'dart:js_interop';
+import 'dart:typed_data';
 
 import 'package:web/web.dart' as web;
 
@@ -63,6 +64,13 @@ class NativeWebSocket {
   void send(String data) {
     if (!_closed && _ws.readyState == web.WebSocket.OPEN) {
       _ws.send(data.toJS);
+    }
+  }
+
+  /// Send raw binary data (used by SttService for PCM16 audio frames).
+  void sendBytes(Uint8List bytes) {
+    if (!_closed && _ws.readyState == web.WebSocket.OPEN) {
+      _ws.send(bytes.buffer.toJS);
     }
   }
 

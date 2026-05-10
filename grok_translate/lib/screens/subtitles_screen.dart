@@ -387,7 +387,7 @@ class _EmptyState extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'Translations will appear here',
+            'Subtitles will appear here as you speak',
             style: theme.textTheme.bodySmall
                 ?.copyWith(color: theme.colorScheme.outlineVariant),
           ),
