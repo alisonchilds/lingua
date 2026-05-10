@@ -385,6 +385,11 @@ class ConversationController extends StateNotifier<ConversationState> {
         _responseMessageAdded = false;
         _translationInFlight = false; // allow next utterance
 
+        // Delete all conversation items accumulated during this translation
+        // turn. Without this, the model sees prior exchanges as a chat history
+        // and drifts into assistant mode ("How can I assist you today?").
+        _api.clearConversationHistory();
+
         if (state.appMode != AppMode.subtitles) {
           // Translator mode: clear any mic echo that crept in during playback.
           _transcriptAccumulator.clear();

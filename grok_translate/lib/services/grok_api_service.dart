@@ -65,6 +65,10 @@ class GrokApiService {
   LanguageConfig? _lastLangConfig;
   VadSettings? _lastVadSettings;
 
+  // Conversation item IDs received from conversation.item.added events.
+  // Cleared after each response so every translation starts with empty context.
+  final List<String> _conversationItemIds = [];
+
   Stream<GrokServerEvent> get events => _eventController.stream;
   Stream<bool> get connectionStatus => _connectedController.stream;
   bool get isConnected => _connected;
@@ -98,16 +102,15 @@ class GrokApiService {
 
   /// Request a translation for the given transcript.
   ///
-  /// Uses response.create with an explicit `input` array rather than the
-  /// conversation.item.create + response.create two-step. Providing `input`
-  /// directly tells the API to use only those items for this response and to
-  /// NOT add the exchange to the running conversation history. This keeps
-  /// every translation request stateless — the model never sees previous
-  /// translation exchanges as conversational context, which is what causes
-  /// it to drift into assistant personality ("Hello. How can I assist you?").
+  /// Uses conversation.item.create to inject the translation command, then
+  /// response.create to generate the reply. Per-response `instructions`
+  /// reinforce translator-only behaviour on top of the session system prompt.
   ///
-  /// Per-response `instructions` provide an additional layer of enforcement
-  /// on top of the session-level system prompt.
+  /// After each response completes the controller calls
+  /// [clearConversationHistory] to delete all accumulated conversation items,
+  /// keeping every translation request stateless. Without this deletion the
+  /// model sees prior exchanges as a chat conversation and drifts into
+  /// assistant mode (e.g. "Hello. How can I assist you today?").
   void requestTranslation({
     required String transcript,
     required String fromLanguage,
@@ -116,43 +119,54 @@ class GrokApiService {
   }) {
     // In audio (translator) mode, cancel any response Grok may have
     // auto-started due to barge-in or mic echo. Not needed in text-only
-    // (subtitles) mode — there is no audio output and create_response is
-    // false, so there is never an active response to cancel.
+    // (subtitles) mode — create_response is false so there is never an
+    // active response to cancel.
     if (!textOnly) {
       _send({'type': 'response.cancel'});
     }
 
     _send({
-      'type': 'response.create',
-      'response': {
-        'modalities': textOnly ? ['text'] : ['audio', 'text'],
-        // Per-response instruction override — reinforces translator-only
-        // behaviour even if the session-level prompt is weakened by context.
-        'instructions': 'You are a pure translation engine. '
-            'Translate the text below from $fromLanguage into $toLanguage. '
-            'Output ONLY the $toLanguage translation. '
-            'No greetings, no assistance, no conversation, no commentary. '
-            'Translated words only.',
-        // Providing input here overrides the accumulated conversation history
-        // for this response, making each translation request fully isolated.
-        'input': [
+      'type': 'conversation.item.create',
+      'item': {
+        'type': 'message',
+        'role': 'user',
+        'content': [
           {
-            'type': 'message',
-            'role': 'user',
-            'content': [
-              {
-                'type': 'input_text',
-                'text': '[TEXT_TO_TRANSLATE from $fromLanguage into $toLanguage]\n'
-                    '"$transcript"\n'
-                    '[/TEXT_TO_TRANSLATE]\n'
-                    'Output ONLY the $toLanguage translation. '
-                    'Do not answer, comment, or add anything else.',
-              }
-            ],
+            'type': 'input_text',
+            'text': '[TEXT_TO_TRANSLATE from $fromLanguage into $toLanguage]\n'
+                '"$transcript"\n'
+                '[/TEXT_TO_TRANSLATE]\n'
+                'Output ONLY the $toLanguage translation. '
+                'Do not answer, comment, or add anything else.',
           }
         ],
       },
     });
+
+    _send({
+      'type': 'response.create',
+      'response': {
+        'modalities': textOnly ? ['text'] : ['audio', 'text'],
+        // Per-response instruction override on top of the session prompt.
+        'instructions': 'You are a pure translation engine. '
+            'Translate the [TEXT_TO_TRANSLATE] block from $fromLanguage '
+            'into $toLanguage. '
+            'Output ONLY the $toLanguage translation. '
+            'No greetings, no assistance, no conversation, no commentary.',
+      },
+    });
+  }
+
+  /// Delete every tracked conversation item from the server's history.
+  ///
+  /// Called after each response.done to ensure the next translation request
+  /// sees an empty conversation context, preventing the model from treating
+  /// previous translation exchanges as a conversational chat history.
+  void clearConversationHistory() {
+    for (final id in List<String>.from(_conversationItemIds)) {
+      _send({'type': 'conversation.item.delete', 'item_id': id});
+    }
+    _conversationItemIds.clear();
   }
 
   void updateSession({
@@ -356,6 +370,19 @@ Rules you MUST follow with zero exceptions:
     try {
       final json = jsonDecode(raw as String) as Map<String, dynamic>;
       final typeStr = json['type'] as String? ?? '';
+
+      // Track conversation item IDs so we can delete them after each response
+      // and keep every translation request isolated from prior context.
+      if (typeStr == 'conversation.item.added') {
+        final itemId =
+            (json['item'] as Map<String, dynamic>?)?['id'] as String?;
+        if (itemId != null) {
+          _conversationItemIds.add(itemId);
+          _log.d('Tracking conversation item: $itemId');
+        }
+        return; // No need to broadcast this to the controller
+      }
+
       final eventType = grokEventTypeFromString(typeStr);
 
       if (eventType == GrokServerEventType.unknown) {
@@ -448,6 +475,9 @@ Rules you MUST follow with zero exceptions:
     _channelSub = null;
     try { await _channel?.sink.close(); } catch (_) {}
     _channel = null;
+
+    // Items only exist within a WebSocket session; clear IDs on close.
+    _conversationItemIds.clear();
   }
 
   void _setConnected(bool value) {
