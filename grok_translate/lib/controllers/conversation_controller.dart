@@ -103,6 +103,13 @@ class ConversationController extends StateNotifier<ConversationState> {
   // (stops echo loops where speaker audio re-enters the mic).
   bool _translationInFlight = false;
 
+  // Set to true in startSession(); cleared when session.updated is received.
+  // The mic is only started after session.updated so that the server has
+  // applied create_response:false before any audio arrives — prevents the
+  // default assistant auto-response firing in the brief window between
+  // WebSocket open and session.update being processed.
+  bool _pendingSessionReady = false;
+
   Timer? _transcriptDebounce;
   final StringBuffer _transcriptAccumulator = StringBuffer();
 
@@ -169,17 +176,11 @@ class ConversationController extends StateNotifier<ConversationState> {
       appMode: state.appMode,
     );
 
-    // Start mic
-    final micStarted = await _audio.startRecording();
-    if (!micStarted) {
-      _setError('Microphone permission denied or unavailable.');
-      return;
-    }
-
-    // Forward mic chunks to the API
-    _micSub = _audio.micAudioChunks.listen((b64chunk) {
-      _api.appendAudio(b64chunk);
-    });
+    // Mic is started in _onSessionReady() once session.updated is received.
+    // This prevents audio reaching the server while it still has default
+    // (assistant) settings — the window between WebSocket open and
+    // session.update being processed can cause unwanted auto-responses.
+    _pendingSessionReady = true;
 
     state = state.copyWith(
       isSessionActive: true,
@@ -187,11 +188,12 @@ class ConversationController extends StateNotifier<ConversationState> {
       messages: [],
     );
     _setStatus(ConversationStatus.listening);
-    _log.i('Session started.');
+    _log.i('Session started — waiting for session.updated before mic.');
   }
 
   /// End the translation session and release resources.
   Future<void> endSession() async {
+    _pendingSessionReady = false;
     await _micSub?.cancel();
     _micSub = null;
     await _audio.stopRecording();
@@ -261,8 +263,15 @@ class ConversationController extends StateNotifier<ConversationState> {
   void _handleApiEvent(GrokServerEvent event) {
     switch (event.type) {
       case GrokServerEventType.sessionCreated:
+        _log.d('Session created (waiting for session.updated).');
+        break;
+
       case GrokServerEventType.sessionUpdated:
-        _log.d('Session ready.');
+        _log.d('Session updated — server has applied our settings.');
+        if (_pendingSessionReady) {
+          _pendingSessionReady = false;
+          _onSessionReady();
+        }
         break;
 
       case GrokServerEventType.inputAudioBufferSpeechStarted:
@@ -294,18 +303,24 @@ class ConversationController extends StateNotifier<ConversationState> {
         if (event.detectedLanguage != null) {
           _updateDetectedLanguage(event.detectedLanguage!);
         }
-        final rawText = event.raw?['transcript'] as String? ??
-            (event.raw?['transcription'] as Map?)
-                ?.cast<String, dynamic>()['text'] as String? ??
-            '';
-        // In subtitles mode there is no audio playback so there is no echo
-        // risk — allow transcripts to accumulate even while a translation is
-        // in flight so that back-to-back phrases are not dropped.
+        final rawText = (event.raw?['transcript'] as String? ??
+                (event.raw?['transcription'] as Map?)
+                    ?.cast<String, dynamic>()['text'] as String? ??
+                '')
+            .trim();
         final isSubtitlesMode = state.appMode == AppMode.subtitles;
-        if (rawText.isNotEmpty && (!_translationInFlight || isSubtitlesMode)) {
+        // Skip duplicate transcriptions — VAD sometimes fires multiple
+        // events for the same audio segment, which causes doubled output
+        // (e.g. "Guten Tag Guten Tag" → "Good day. Good day.").
+        final alreadyInAccumulator =
+            _transcriptAccumulator.toString().trim() == rawText ||
+            _transcriptAccumulator.toString().trim().endsWith(rawText);
+        if (rawText.isNotEmpty &&
+            !alreadyInAccumulator &&
+            (!_translationInFlight || isSubtitlesMode)) {
           _transcriptAccumulator
             ..write(_transcriptAccumulator.isNotEmpty ? ' ' : '')
-            ..write(rawText.trim());
+            ..write(rawText);
           _transcriptDebounce?.cancel();
           _transcriptDebounce =
               Timer(const Duration(milliseconds: 1200), () {
@@ -587,6 +602,21 @@ class ConversationController extends StateNotifier<ConversationState> {
 
   String _capitalize(String s) =>
       s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
+  /// Called when session.updated is received — starts the mic now that the
+  /// server has applied create_response:false and our translator instructions.
+  Future<void> _onSessionReady() async {
+    if (_micSub != null) return; // already started (reconnect path)
+    final micStarted = await _audio.startRecording();
+    if (!micStarted) {
+      _setError('Microphone permission denied or unavailable.');
+      return;
+    }
+    _micSub = _audio.micAudioChunks.listen((b64chunk) {
+      _api.appendAudio(b64chunk);
+    });
+    _log.i('Mic started after session.updated confirmed.');
+  }
 
   /// Reset subtitles mode back to listening after a translation completes or
   /// an error occurs. Subtitles mode has no audio player, so the normal
