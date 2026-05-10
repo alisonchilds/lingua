@@ -6,9 +6,33 @@ import '../models/conversation_models.dart';
 import '../theme/app_theme.dart';
 
 /// A single message bubble in the subtitle/transcript list.
+///
+/// If the model slips in commentary after the pure translation (e.g.
+/// "Good day. It's a polite German greeting..."), the bubble splits it:
+/// the first sentence is shown as the main translation in normal weight,
+/// and any trailing commentary is shown below in small italic muted text
+/// so it is clearly secondary.
 class TranslationBubble extends StatelessWidget {
   const TranslationBubble({super.key, required this.message});
   final TranslationMessage message;
+
+  /// Returns the first sentence of [text] as the pure translation.
+  static String _mainPart(String text) {
+    final m = _sentenceBoundary.firstMatch(text);
+    return m == null ? text : text.substring(0, m.start + 1).trim();
+  }
+
+  /// Returns everything after the first sentence, or null if nothing extra.
+  static String? _notePart(String text) {
+    final m = _sentenceBoundary.firstMatch(text);
+    if (m == null) return null;
+    final rest = text.substring(m.start + 1).trim();
+    return rest.isEmpty ? null : rest;
+  }
+
+  // Matches a sentence-ending punctuation followed by a space and a capital,
+  // indicating the start of a new (likely explanatory) sentence.
+  static final _sentenceBoundary = RegExp(r'[.!?]\s+(?=[A-Z])');
 
   @override
   Widget build(BuildContext context) {
@@ -19,6 +43,9 @@ class TranslationBubble extends StatelessWidget {
         : AppTheme.user2Color.withValues(alpha: 0.12);
     final borderColor =
         isUser1 ? AppTheme.user1Color : AppTheme.user2Color;
+
+    final mainText = _mainPart(message.translatedText);
+    final noteText = _notePart(message.translatedText);
 
     return Align(
       alignment: isUser1 ? Alignment.centerLeft : Alignment.centerRight,
@@ -64,10 +91,19 @@ class TranslationBubble extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 6),
-              Text(
-                message.translatedText,
-                style: theme.textTheme.bodyMedium,
-              ),
+              // Pure translation — full weight
+              Text(mainText, style: theme.textTheme.bodyMedium),
+              // Optional model commentary — visually de-emphasised
+              if (noteText != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  noteText,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
             ],
           ),
         ),

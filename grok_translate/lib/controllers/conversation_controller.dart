@@ -413,7 +413,17 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.error:
-        _setError(event.errorMessage ?? 'Unknown API error');
+        final errMsg = event.errorMessage ?? 'Unknown API error';
+        // "Item not found" errors are non-critical — they are API responses
+        // to conversation.item.delete calls for items that were already
+        // removed (e.g. deleted in a previous cleanup round). Surfacing them
+        // as a red banner confuses users; log only.
+        if (errMsg.toLowerCase().contains('not found') ||
+            errMsg.toLowerCase().contains('item not found')) {
+          _log.w('Non-critical API error (suppressed from UI): $errMsg');
+        } else {
+          _setError(errMsg);
+        }
         break;
 
       case GrokServerEventType.inputAudioBufferCommitted:
