@@ -70,13 +70,6 @@ class _SubtitlesScreenState extends ConsumerState<SubtitlesScreen> {
                   const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
               child: Row(
                 children: [
-                  // Language detection status
-                  Expanded(
-                    child: _LanguageStatusLabel(
-                      detectedLang: state.detectedLang1,
-                      detectedFlag: state.detectedLang1Flag,
-                    ),
-                  ),
                   // Mic status dot
                   _StatusDot(status: state.status),
                   const SizedBox(width: 12),
@@ -197,50 +190,6 @@ class _DebugBar extends StatelessWidget {
   }
 }
 
-class _LanguageStatusLabel extends StatelessWidget {
-  const _LanguageStatusLabel({
-    required this.detectedLang,
-    required this.detectedFlag,
-  });
-  final String? detectedLang;
-  final String? detectedFlag;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final detected = detectedLang != null;
-
-    final label = detected
-        ? 'Language Detected: ${detectedFlag ?? ''} $detectedLang'.trim()
-        : 'Listening\u2026';
-
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 400),
-      transitionBuilder: (child, animation) => FadeTransition(
-        opacity: animation,
-        child: SlideTransition(
-          position: Tween<Offset>(
-            begin: const Offset(0, 0.3),
-            end: Offset.zero,
-          ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOut)),
-          child: child,
-        ),
-      ),
-      child: Text(
-        label,
-        key: ValueKey(detectedLang),
-        style: theme.textTheme.labelMedium?.copyWith(
-          color: detected
-              ? theme.colorScheme.primary
-              : theme.colorScheme.onSurfaceVariant,
-          fontWeight: detected ? FontWeight.w600 : FontWeight.w400,
-          fontStyle: detected ? FontStyle.normal : FontStyle.italic,
-        ),
-      ),
-    );
-  }
-}
-
 class _StatusDot extends StatelessWidget {
   const _StatusDot({required this.status});
   final ConversationStatus status;
@@ -314,14 +263,14 @@ class _SubtitleLine extends StatelessWidget {
               color: theme.colorScheme.onSurface,
             ),
           ),
-          // Assistant commentary (if any) — small italic
           if (_notePart(text) != null) ...[
             const SizedBox(height: 4),
             Text(
               _notePart(text)!,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                fontStyle: FontStyle.italic,
+              style: theme.textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w300,
+                height: 1.3,
+                color: theme.colorScheme.onSurface,
               ),
             ),
           ],
