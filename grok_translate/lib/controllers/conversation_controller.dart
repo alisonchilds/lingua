@@ -392,35 +392,33 @@ class ConversationController extends StateNotifier<ConversationState> {
           state = state.copyWith(partialTranscript: '');
         }
         _responseMessageAdded = false;
-        _translationInFlight = false; // allow next utterance
-
-        // Delete all conversation items accumulated during this translation
-        // turn. Without this, the model sees prior exchanges as a chat history
-        // and drifts into assistant mode ("How can I assist you today?").
+        _translationInFlight = false;
         _api.clearConversationHistory();
 
         if (state.appMode != AppMode.subtitles) {
-          // Translator mode: clear any mic echo that crept in during playback.
+          // Translator mode: clear mic echo that crept in during playback.
           _transcriptAccumulator.clear();
           _transcriptDebounce?.cancel();
-        } else if (state.isSessionActive) {
-          // Subtitles mode has no audio playback, so the player callback that
-          // normally drives the status back to listening never fires. Explicitly
-          // return to listening so the UI shows the session is still active and
-          // the waveform/status indicator reflect the correct state.
-          _setStatus(ConversationStatus.listening);
+        } else {
+          _resetSubtitlesToListening();
         }
         break;
 
       case GrokServerEventType.error:
         final errMsg = event.errorMessage ?? 'Unknown API error';
-        // "Item not found" errors are non-critical — they are API responses
-        // to conversation.item.delete calls for items that were already
-        // removed (e.g. deleted in a previous cleanup round). Surfacing them
-        // as a red banner confuses users; log only.
-        if (errMsg.toLowerCase().contains('not found') ||
-            errMsg.toLowerCase().contains('item not found')) {
-          _log.w('Non-critical API error (suppressed from UI): $errMsg');
+        // Non-critical errors: item deletes hitting already-removed items,
+        // or response.cancel with no active response. Log only — do not
+        // surface as a UI error banner.
+        final isNonCritical = errMsg.toLowerCase().contains('not found') ||
+            errMsg.toLowerCase().contains('no response') ||
+            errMsg.toLowerCase().contains('cancel');
+        if (isNonCritical) {
+          _log.w('Non-critical API error (suppressed): $errMsg');
+          // In subtitles mode make sure we return to listening even after
+          // a suppressed error so the session doesn't silently get stuck.
+          if (state.appMode == AppMode.subtitles) {
+            _resetSubtitlesToListening();
+          }
         } else {
           _setError(errMsg);
         }
@@ -438,17 +436,20 @@ class ConversationController extends StateNotifier<ConversationState> {
     final to = _pendingTo ?? (state.languageConfig?.lang2Name ?? 'Language 2');
 
     // Extract LANG:[code] prefix that the model adds in subtitles mode.
-    // The model may use a newline OR a space as separator (e.g. "LANG:en\n"
-    // or "LANG:en Translation"), so match any whitespace after the code.
-    String textForSanitization = translatedText;
-    final langPrefix = RegExp(r'^LANG:([a-zA-Z]{2,3})\s+', multiLine: false);
-    final langMatch = langPrefix.firstMatch(translatedText.trimLeft());
-    if (langMatch != null) {
-      final isoCode = langMatch.group(1)!.toLowerCase();
-      if (state.detectedLang1 == null) {
-        _updateDetectedLanguage(isoCode);
+    // Work entirely on the trimmed string so match indices are consistent.
+    String textForSanitization = translatedText.trim();
+    if (textForSanitization.startsWith('LANG:')) {
+      // Find the end of the language code (2-3 letters after the colon)
+      final wsIdx = textForSanitization.indexOf(RegExp(r'\s'), 5);
+      if (wsIdx > 5) {
+        final code = textForSanitization.substring(5, wsIdx);
+        if (code.length <= 3) {
+          if (state.detectedLang1 == null) {
+            _updateDetectedLanguage(code.toLowerCase());
+          }
+          textForSanitization = textForSanitization.substring(wsIdx).trimLeft();
+        }
       }
-      textForSanitization = translatedText.substring(langMatch.end).trimLeft();
     }
 
     // Strip any framing tags the model may accidentally echo back.
@@ -534,6 +535,8 @@ class ConversationController extends StateNotifier<ConversationState> {
   /// Remove any prompt framing the model may echo back verbatim.
   String _sanitizeTranslation(String text) {
     var cleaned = text;
+    // Fallback LANG: strip in case _addMessage() didn't catch it
+    cleaned = cleaned.replaceAll(RegExp(r'^LANG:[a-zA-Z]{2,3}\s+', multiLine: false), '');
     // Strip any injected task-header lines the model might parrot back
     cleaned = cleaned.replaceAll(RegExp(r'^SUBTITLE_TASK\s*\|[^\n]*\n?', multiLine: true), '');
     cleaned = cleaned.replaceAll(RegExp(r'^TRANSLATE\s*\|[^\n]*\n?', multiLine: true), '');
@@ -584,6 +587,17 @@ class ConversationController extends StateNotifier<ConversationState> {
 
   String _capitalize(String s) =>
       s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
+  /// Reset subtitles mode back to listening after a translation completes or
+  /// an error occurs. Subtitles mode has no audio player, so the normal
+  /// player-callback path never fires — this must be called explicitly.
+  void _resetSubtitlesToListening() {
+    if (!state.isSessionActive) return;
+    _translationInFlight = false;
+    _transcriptBuffer.clear();
+    state = state.copyWith(partialTranscript: '');
+    _setStatus(ConversationStatus.listening);
+  }
 
   void _setStatus(ConversationStatus status) {
     if (state.status != status) {
