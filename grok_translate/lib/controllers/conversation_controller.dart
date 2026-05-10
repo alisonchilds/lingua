@@ -308,18 +308,22 @@ class ConversationController extends StateNotifier<ConversationState> {
                     ?.cast<String, dynamic>()['text'] as String? ??
                 '')
             .trim();
-        final isSubtitlesMode = state.appMode == AppMode.subtitles;
-        // Skip duplicate/overlapping transcriptions — VAD sometimes fires
-        // multiple events for the same segment (exact match) or successive
-        // events where the second transcript is a longer version of the first
-        // (contains check), e.g. "Come" then "Come ce va".
+
+        // Subtitles mode uses create_response:true — the server auto-responds
+        // to every VAD segment so no accumulator/debounce/injection is needed.
+        // Just update the language label (above) and move on.
+        if (state.appMode == AppMode.subtitles) break;
+
+        // Translator mode: accumulate transcript and trigger translation.
+        // Skip duplicates — VAD sometimes fires multiple events for the same
+        // segment, or successive events where one is a superset of the other.
         final accumulated = _transcriptAccumulator.toString().trim();
         final alreadyInAccumulator = accumulated == rawText ||
             accumulated.endsWith(rawText) ||
             rawText.contains(accumulated) && accumulated.isNotEmpty;
         if (rawText.isNotEmpty &&
             !alreadyInAccumulator &&
-            (!_translationInFlight || isSubtitlesMode)) {
+            !_translationInFlight) {
           _transcriptAccumulator
             ..write(_transcriptAccumulator.isNotEmpty ? ' ' : '')
             ..write(rawText);
@@ -410,18 +414,18 @@ class ConversationController extends StateNotifier<ConversationState> {
         }
         _responseMessageAdded = false;
         _translationInFlight = false;
-        // Do NOT call clearConversationHistory() here. If the user has
-        // already started speaking the next phrase, its VAD audio item may
-        // be pending transcription. Deleting it here would cancel that
-        // transcription and silently stop the session. Cleanup happens at
-        // the start of requestTranslation() for the next phrase instead.
 
-        if (state.appMode != AppMode.subtitles) {
-          // Translator mode: clear mic echo that crept in during playback.
+        if (state.appMode == AppMode.subtitles) {
+          // Subtitles: create_response:true means the server auto-generates
+          // the next response. No injection or history management needed.
+          // Just reset status so the UI shows we're ready for the next phrase.
+          _resetSubtitlesToListening();
+        } else {
+          // Translator: clear mic echo that crept in during playback, then
+          // clean up the injected conversation items for this turn.
           _transcriptAccumulator.clear();
           _transcriptDebounce?.cancel();
-        } else {
-          _resetSubtitlesToListening();
+          _api.clearConversationHistory();
         }
         break;
 
@@ -493,9 +497,12 @@ class ConversationController extends StateNotifier<ConversationState> {
   }
 
   /// Called once we have a full transcript — fires one translation request.
+  /// Only used in translator mode; subtitles mode uses create_response:true
+  /// so the server auto-responds to every VAD segment without client injection.
   void _triggerTranslation(String transcript) {
     final cfg = state.languageConfig ?? const LanguageConfig();
     final isSubtitles = state.appMode == AppMode.subtitles;
+    if (isSubtitles) return; // should not be reached, guard anyway
 
     final String fromLang;
     final String toLang;

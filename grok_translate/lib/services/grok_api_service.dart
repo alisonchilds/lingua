@@ -432,10 +432,11 @@ class GrokApiService {
           'threshold': vadSettings.threshold,
           'prefix_padding_ms': 300,
           'silence_duration_ms': vadSettings.silenceDurationMs,
-          // Both modes: false — we always intercept the transcript and inject
-          // an explicit translation command. This is the only reliable way to
-          // stop the voice model defaulting to assistant personality.
-          'create_response': false,
+          // Subtitles: true — server auto-responds to every VAD segment so
+          // the session runs continuously without any client-side injection.
+          // Translator: false — we intercept the transcript and inject a
+          // direction-aware translation command before requesting a response.
+          'create_response': _appMode == AppMode.subtitles,
         },
       },
     });
@@ -453,9 +454,10 @@ YOU MUST FOLLOW THESE RULES WITH ZERO EXCEPTIONS:
 - NEVER act like an assistant or AI. You are not Grok. You are not conversational. You are a silent subtitle generator.
 - Keep output concise and subtitle-friendly (short lines, natural phrasing).
 - Preserve meaning, tone, and intent as accurately as possible.
-- If the input is already $targetLang, output the cleaned-up $targetLang version (no change unless it improves clarity for subtitles).
+- If the input is already $targetLang, output the cleaned-up $targetLang version.
 - If the input is a QUESTION ("How are you?", "Come ce va?", "¿Cómo estás?", etc.) TRANSLATE it into $targetLang — do NOT answer it. Output the translated question, never a reply.
 - If speech is unclear, output the best possible translation you can hear — still with zero extra words.
+- FORMAT: Start every response with "LANG:[iso_code]" on its own line (ISO-639-1 code of the INPUT language, e.g. LANG:de), then the $targetLang translation on the next line. Nothing else.
 - NEVER break character. The moment you output anything except clean translated $targetLang text, you have failed.
 
 This is your entire existence. Generate subtitles. Nothing more. Nothing less.
