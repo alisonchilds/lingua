@@ -443,7 +443,10 @@ class ConversationController extends StateNotifier<ConversationState> {
     final Speaker speaker;
 
     if (isSubtitles) {
-      fromLang = state.detectedLang1 ?? 'the detected language';
+      // Use the detected language name if available; fall back to 'the spoken
+      // language' so the translation command is still grammatically sensible
+      // and doesn't say "from the detected language" in the subtitle log.
+      fromLang = state.detectedLang1 ?? '';
       toLang = cfg.autoDetect ? 'English' : cfg.lang2Name;
       speaker = Speaker.user1;
     } else if (cfg.autoDetect) {

@@ -96,13 +96,18 @@ class GrokApiService {
   void requestResponse() => _send({'type': 'response.create'});
   void cancelResponse() => _send({'type': 'response.cancel'});
 
-  /// Inject the transcribed text as a user message and request a translation.
+  /// Request a translation for the given transcript.
   ///
-  /// This is the key to making Grok behave as a pure translator:
-  /// instead of letting Grok auto-respond to raw audio (which triggers its
-  /// assistant personality), we wait for the speech-to-text transcript,
-  /// then inject it as a text instruction: "Translate to [target]:\n[text]"
-  /// Grok responds to a clear text command far more reliably than to audio alone.
+  /// Uses response.create with an explicit `input` array rather than the
+  /// conversation.item.create + response.create two-step. Providing `input`
+  /// directly tells the API to use only those items for this response and to
+  /// NOT add the exchange to the running conversation history. This keeps
+  /// every translation request stateless — the model never sees previous
+  /// translation exchanges as conversational context, which is what causes
+  /// it to drift into assistant personality ("Hello. How can I assist you?").
+  ///
+  /// Per-response `instructions` provide an additional layer of enforcement
+  /// on top of the session-level system prompt.
   void requestTranslation({
     required String transcript,
     required String fromLanguage,
@@ -112,37 +117,40 @@ class GrokApiService {
     // In audio (translator) mode, cancel any response Grok may have
     // auto-started due to barge-in or mic echo. Not needed in text-only
     // (subtitles) mode — there is no audio output and create_response is
-    // false, so there is never an active response to cancel. Sending an
-    // empty cancel can cause a server error event that disrupts the flow.
+    // false, so there is never an active response to cancel.
     if (!textOnly) {
       _send({'type': 'response.cancel'});
     }
-
-    // Frame as a translation task, not a conversational turn.
-    // Wrapping in [TEXT_TO_TRANSLATE] makes it clear this is source material
-    // to process, not a question or statement addressed to the model.
-    _send({
-      'type': 'conversation.item.create',
-      'item': {
-        'type': 'message',
-        'role': 'user',
-        'content': [
-          {
-            'type': 'input_text',
-            'text': '[TEXT_TO_TRANSLATE from $fromLanguage into $toLanguage]\n'
-                '"$transcript"\n'
-                '[/TEXT_TO_TRANSLATE]\n'
-                'Output ONLY the $toLanguage translation. '
-                'Do not answer, comment, or add anything else.',
-          }
-        ],
-      },
-    });
 
     _send({
       'type': 'response.create',
       'response': {
         'modalities': textOnly ? ['text'] : ['audio', 'text'],
+        // Per-response instruction override — reinforces translator-only
+        // behaviour even if the session-level prompt is weakened by context.
+        'instructions': 'You are a pure translation engine. '
+            'Translate the text below from $fromLanguage into $toLanguage. '
+            'Output ONLY the $toLanguage translation. '
+            'No greetings, no assistance, no conversation, no commentary. '
+            'Translated words only.',
+        // Providing input here overrides the accumulated conversation history
+        // for this response, making each translation request fully isolated.
+        'input': [
+          {
+            'type': 'message',
+            'role': 'user',
+            'content': [
+              {
+                'type': 'input_text',
+                'text': '[TEXT_TO_TRANSLATE from $fromLanguage into $toLanguage]\n'
+                    '"$transcript"\n'
+                    '[/TEXT_TO_TRANSLATE]\n'
+                    'Output ONLY the $toLanguage translation. '
+                    'Do not answer, comment, or add anything else.',
+              }
+            ],
+          }
+        ],
       },
     });
   }

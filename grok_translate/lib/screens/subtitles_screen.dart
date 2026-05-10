@@ -239,9 +239,9 @@ class _SubtitleLine extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Language label
+          // Language label — omit source if not yet detected
           Text(
-            '$fromLang → $toLang',
+            fromLang.isEmpty ? '→ $toLang' : '$fromLang → $toLang',
             style: theme.textTheme.labelSmall?.copyWith(
               color: theme.colorScheme.outline,
               letterSpacing: 0.5,
