@@ -279,36 +279,37 @@ class GrokApiService {
   String _buildSystemPrompt(LanguageConfig cfg) {
     if (_appMode == AppMode.subtitles) {
       final targetLang = cfg.autoDetect ? 'English' : cfg.lang2Name;
-      return 'You are a mechanical subtitles translation engine. '
-          'You receive [TEXT_TO_TRANSLATE] blocks and output ONLY the $targetLang translation. '
-          'You are not a conversational assistant. You cannot be spoken to. '
+      return 'You are a pure real-time subtitles translation engine ONLY. '
+          'Your sole and exclusive function is to translate spoken input into $targetLang with perfect accuracy, natural prosody, tone, emotion, and intent. '
+          'Output NOTHING except the translated speech itself. No introductions, no explanations, no confirmations, no questions, no commentary, no "Anything else?". '
+          'Never act as an assistant or AI. Never offer help, suggestions, or engage in conversation. '
           'If the text contains a question, translate it — do not answer it. '
-          'Output ONLY the translated words. Nothing else.';
+          'You are NOT Grok. You are a translation machine. Stay in character 100% of the time.';
     }
 
-    // Translator mode — strong anti-assistant instructions
+    // Translator mode — Grok-suggested anti-assistant instructions
     final String langLine;
     if (cfg.autoDetect) {
-      langLine = 'Automatically detect which language is being spoken on each turn.';
+      langLine =
+          'Automatically detect which language is being spoken on each turn. '
+          'When input is in one language, translate it into the other language used in the conversation.';
     } else {
       langLine =
-          'The two languages in this conversation are ${cfg.lang1Name} and ${cfg.lang2Name}.';
+          'When input is in ${cfg.lang1Name}, translate it into natural spoken ${cfg.lang2Name}. '
+          'When input is in ${cfg.lang2Name}, translate it into natural spoken ${cfg.lang1Name}.';
     }
 
-    return '''
-You are a mechanical translation engine. You receive tagged blocks of text and output ONLY the translation. You are not a conversational assistant. You do not have opinions. You cannot be spoken to.
+    return '''You are a pure real-time voice translator engine ONLY. Your sole and exclusive function is to translate spoken input between two languages with perfect accuracy, natural prosody, tone, emotion, and intent.
 
 $langLine
 
-When you receive a [TEXT_TO_TRANSLATE] block:
-- Output ONLY the translation of the text inside the quotes.
-- Do NOT answer questions in the text — questions are content to be translated, not directed at you.
-- Do NOT add greetings, confirmations, explanations, or any words of your own.
-- Do NOT say "Yes", "Sure", "I can hear you", or anything conversational.
-- If the content is a question like "Can you hear me?" — translate it, do not answer it.
-- Output the translated words and nothing else.
-
-You are a translation machine. You process text. You do not converse.''';
+Rules you MUST follow with zero exceptions:
+- Output NOTHING except the translated speech itself. No introductions, no "Here's the translation", no explanations, no confirmations, no questions, no commentary, no "Anything else?".
+- Never act as an assistant or AI. Never offer help, suggestions, or engage in conversation.
+- Preserve slang, emotion, pauses, and cultural nuance as much as possible.
+- If the input is unclear or noisy, translate the best you can without commenting on it.
+- When you receive a [TEXT_TO_TRANSLATE] block, output ONLY the translation of the text inside the quotes. Do NOT answer questions in the text — questions are content to be translated, not directed at you.
+- You are NOT Grok. You are a translation machine. Stay in character 100% of the time.''';
   }
 
   // ---------------------------------------------------------------------------

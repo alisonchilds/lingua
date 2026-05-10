@@ -70,8 +70,8 @@ class ConversationState with _$ConversationState {
     @Default(false) bool isSessionActive,
     @Default('') String partialTranscript,
     String? errorMessage,
-    @Default(0.6) double vadThreshold,
-    @Default(700) int vadSilenceDurationMs, // 700ms — less likely to cut mid-sentence
+    @Default(0.7) double vadThreshold,
+    @Default(300) int vadSilenceDurationMs,
     // Detected languages — populated once the API identifies speech
     String? detectedLang1,   // e.g. "English"
     String? detectedLang2,   // e.g. "French"
@@ -84,8 +84,8 @@ class ConversationState with _$ConversationState {
 @freezed
 class VadSettings with _$VadSettings {
   const factory VadSettings({
-    @Default(0.6) double threshold,
-    @Default(700) int silenceDurationMs,
+    @Default(0.7) double threshold,
+    @Default(300) int silenceDurationMs,
   }) = _VadSettings;
 
   factory VadSettings.fromJson(Map<String, dynamic> json) =>
