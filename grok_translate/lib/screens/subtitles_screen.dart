@@ -245,6 +245,17 @@ class _SubtitleLine extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Detected source language label (small, muted)
+          if (fromLang.isNotEmpty) ...[
+            Text(
+              fromLang,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+                letterSpacing: 0.4,
+              ),
+            ),
+            const SizedBox(height: 4),
+          ],
           // Pure translation — large and clean
           Text(
             _mainPart(text),
