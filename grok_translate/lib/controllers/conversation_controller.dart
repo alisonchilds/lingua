@@ -133,6 +133,9 @@ class ConversationController extends StateNotifier<ConversationState> {
   // current utterance. Cleared when isFinal fires (triggering translation) or
   // when a new non-final partial arrives (next utterance started).
   bool _sttSpeechEnded = false;
+  // Prevents a second translation firing for the same utterance when the STT
+  // emits multiple final events (e.g. transcript.partial + transcript.done).
+  bool _sttTranslationInFlight = false;
 
   void _init() {
     final langCfg = _prefs.getLanguageConfig();
@@ -251,19 +254,21 @@ class ConversationController extends StateNotifier<ConversationState> {
 
       // Translate once we have the locked-in transcript AND speech has ended.
       // The two conditions may arrive in either order or in a single event.
-      if (_sttSpeechEnded && event.isFinal) {
+      if (_sttSpeechEnded && event.isFinal && !_sttTranslationInFlight) {
         _sttSpeechEnded = false; // consumed — ready for the next utterance
+        _sttTranslationInFlight = true;
         state = state.copyWith(partialTranscript: '');
         _setStatus(ConversationStatus.listening);
 
         final transcript = event.text.trim();
-        if (transcript.isEmpty) return;
-
-        _log.i('[STT final] "$transcript" → $targetLang');
-        final translation = await _translate.translate(transcript, targetLang);
-        if (translation != null && translation.isNotEmpty) {
-          _addSubtitleMessage(translation, targetLang);
+        if (transcript.isNotEmpty) {
+          _log.i('[STT final] "$transcript" → $targetLang');
+          final translation = await _translate.translate(transcript, targetLang);
+          if (translation != null && translation.isNotEmpty) {
+            _addSubtitleMessage(translation, targetLang);
+          }
         }
+        _sttTranslationInFlight = false;
       }
     });
 

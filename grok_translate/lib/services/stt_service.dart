@@ -56,6 +56,10 @@ class SttService {
   bool _autoReconnect = false;
   String? _apiKey;
   String? _queryString; // cached so reconnect uses same params
+  // True once a final transcript event has been emitted for the current
+  // utterance — prevents a duplicate when both transcript.partial {is_final}
+  // and transcript.done carry the same text.
+  bool _finalEmitted = false;
 
   Stream<SttTranscriptEvent> get transcripts => _transcriptController.stream;
   Stream<bool> get connectionStatus => _connectedController.stream;
@@ -171,7 +175,26 @@ class SttService {
       }
 
       if (type == 'transcript.done') {
-        _log.i('STT session complete.');
+        // The xAI API sometimes delivers the final transcript only here,
+        // without a preceding transcript.partial {is_final: true}.
+        // Emit it as a definitive final event unless we already did so.
+        final text = (json['text'] as String? ??
+                (json['transcript'] as Map?)
+                    ?.cast<String, dynamic>()['text'] as String? ??
+                '')
+            .trim();
+        if (text.isNotEmpty && !_finalEmitted) {
+          _finalEmitted = true;
+          _log.i('STT transcript.done — emitting final: "$text"');
+          if (!_transcriptController.isClosed) {
+            _transcriptController.add(SttTranscriptEvent(
+              text: text,
+              isFinal: true,
+              speechFinal: true,
+            ));
+          }
+        }
+        _finalEmitted = false; // reset for next utterance
         return;
       }
 
@@ -181,6 +204,7 @@ class SttService {
         final speechFinal = json['speech_final'] as bool? ?? false;
 
         if (text.isNotEmpty) {
+          if (isFinal) _finalEmitted = true; // suppress duplicate from transcript.done
           final event = SttTranscriptEvent(
             text: text,
             isFinal: isFinal,
