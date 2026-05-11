@@ -120,6 +120,11 @@ class ConversationController extends StateNotifier<ConversationState> {
   Timer? _transcriptDebounce;
   final StringBuffer _transcriptAccumulator = StringBuffer();
 
+  // Last text passed to _triggerTranslation. Backstop against duplicate calls
+  // that slip through the accumulator dedup. Cleared after each completed
+  // translation cycle so the same phrase can be translated again next utterance.
+  String? _lastTranslatedText;
+
   void _init() {
     final langCfg = _prefs.getLanguageConfig();
     final vadSettings = _prefs.getVadSettings();
@@ -150,6 +155,7 @@ class ConversationController extends StateNotifier<ConversationState> {
       } else {
         _audio.setPlaying(false);
         _translationInFlight = false;
+        _lastTranslatedText = null; // allow same phrase on the next utterance
         if (state.isSessionActive) {
           _setStatus(ConversationStatus.listening);
         }
@@ -198,6 +204,7 @@ class ConversationController extends StateNotifier<ConversationState> {
     _pendingSessionReady = false;
     _transcriptDebounce?.cancel();
     _transcriptAccumulator.clear();
+    _lastTranslatedText = null;
 
     await _micSub?.cancel();
     _micSub = null;
@@ -325,34 +332,51 @@ class ConversationController extends StateNotifier<ConversationState> {
             .trim();
 
         // Accumulate and debounce — same logic for both Translator and Subtitles.
-        // (Previously Subtitles mode short-circuited here because it used
-        // create_response:true. Now both modes use create_response:false and
-        // the same manual injection pipeline.)
+        if (rawText.isEmpty || _translationInFlight) break;
+
         final accumulated = _transcriptAccumulator.toString().trim();
-        final alreadyInAccumulator = accumulated == rawText ||
-            accumulated.endsWith(rawText) ||
-            (rawText.contains(accumulated) && accumulated.isNotEmpty);
-        if (rawText.isNotEmpty &&
-            !alreadyInAccumulator &&
-            !_translationInFlight) {
-          _transcriptAccumulator
-            ..write(_transcriptAccumulator.isNotEmpty ? ' ' : '')
-            ..write(rawText);
-          _transcriptDebounce?.cancel();
-          // Subtitles phrases are short and self-contained — 600 ms is
-          // enough to absorb duplicate events without feeling laggy.
-          // Translator allows 1 200 ms so multi-chunk phrases accumulate.
-          _transcriptDebounce = Timer(
-            Duration(
-                milliseconds:
-                    state.appMode == AppMode.subtitles ? 600 : 1200),
-            () {
-              final full = _transcriptAccumulator.toString().trim();
-              _transcriptAccumulator.clear();
-              if (full.isNotEmpty) _triggerTranslation(full);
-            },
-          );
+
+        // ── Deduplication ─────────────────────────────────────────────────
+        // Whisper fires partial + final + confirmation events for the same
+        // segment. Three cases to handle before deciding how to update:
+        //
+        //   (1) Exact duplicate          → skip entirely
+        //   (2) New text is a subset     → skip (accumulated is more complete)
+        //   (3) New text is a superset   → REPLACE, then reset debounce
+        //   (4) Genuinely different text → append normally
+        //
+        // Note: the OLD check used rawText.contains(accumulated) to skip
+        // supersets — that was wrong. "Yeah yeah.".contains("Yeah") → true
+        // caused the more complete final text to be silently dropped,
+        // sending a truncated transcript to the model.
+        if (accumulated == rawText) break;                              // (1)
+        if (accumulated.isNotEmpty && accumulated.endsWith(rawText)) break; // (2)
+        if (accumulated.isNotEmpty && rawText.startsWith(accumulated)) {
+          // (3) Superset: replace so we don't produce "Yeah Yeah yeah."
+          _transcriptAccumulator.clear();
         }
+        // (4) Append (accumulator may be empty after (3) clear or on first event)
+        _transcriptAccumulator
+          ..write(_transcriptAccumulator.isNotEmpty ? ' ' : '')
+          ..write(rawText);
+
+        _transcriptDebounce?.cancel();
+        // Subtitles phrases are short → 600 ms absorbs duplicates without lag.
+        // Translator allows 1 200 ms so multi-chunk phrases can accumulate.
+        _transcriptDebounce = Timer(
+          Duration(
+              milliseconds:
+                  state.appMode == AppMode.subtitles ? 600 : 1200),
+          () {
+            final full = _transcriptAccumulator.toString().trim();
+            _transcriptAccumulator.clear();
+            // Re-check _translationInFlight: a response may have started
+            // between when the timer was scheduled and when it fires.
+            if (full.isNotEmpty && !_translationInFlight) {
+              _triggerTranslation(full);
+            }
+          },
+        );
         break;
 
       case GrokServerEventType.responseCreated:
@@ -506,6 +530,15 @@ class ConversationController extends StateNotifier<ConversationState> {
   ///   Translator: audio + text response, bidirectional speaker alternation.
   ///   Subtitles:  text-only response, always FROM detected lang TO target.
   void _triggerTranslation(String transcript) {
+    // Backstop: if the accumulator dedup lets the same text through twice
+    // (e.g. a race between the speechStopped shortcut and the 1200 ms timer),
+    // silently drop the second call rather than firing a duplicate request.
+    if (transcript == _lastTranslatedText) {
+      _log.d('Duplicate transcript suppressed: "$transcript"');
+      return;
+    }
+    _lastTranslatedText = transcript;
+
     final cfg = state.languageConfig ?? const LanguageConfig();
 
     final String fromLang;
@@ -628,6 +661,7 @@ class ConversationController extends StateNotifier<ConversationState> {
   void _resetToListening() {
     if (!state.isSessionActive) return;
     _translationInFlight = false;
+    _lastTranslatedText = null; // allow same phrase on the next utterance
     _transcriptBuffer.clear();
     state = state.copyWith(partialTranscript: '');
     _setStatus(ConversationStatus.listening);
