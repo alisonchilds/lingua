@@ -5,14 +5,11 @@ import 'package:logger/logger.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/conversation_models.dart';
-// kSupportedLanguages used for ISO code → display name lookup
 import '../models/grok_api_models.dart';
 import '../services/audio_player_service.dart';
-import '../services/chat_translation_service.dart';
 import '../services/grok_api_service.dart';
 import '../services/grok_audio_service.dart';
 import '../services/preferences_service.dart';
-import '../services/stt_service.dart';
 
 // ---------------------------------------------------------------------------
 // Providers
@@ -40,12 +37,6 @@ final audioPlayerServiceProvider = Provider<AudioPlayerService>((ref) {
   return svc;
 });
 
-final sttServiceProvider = Provider<SttService>((ref) {
-  final svc = SttService();
-  ref.onDispose(svc.dispose);
-  return svc;
-});
-
 /// Main conversation state provider.
 final conversationControllerProvider =
     StateNotifierProvider<ConversationController, ConversationState>((ref) {
@@ -54,7 +45,6 @@ final conversationControllerProvider =
     audioService: ref.watch(grokAudioServiceProvider),
     playerService: ref.watch(audioPlayerServiceProvider),
     prefsService: ref.watch(preferencesServiceProvider),
-    sttService: ref.watch(sttServiceProvider),
   );
 });
 
@@ -62,27 +52,36 @@ final conversationControllerProvider =
 // Controller
 // ---------------------------------------------------------------------------
 
-/// Orchestrates the full translation loop:
-///   Mic → GrokApiService → Audio delta stream → AudioPlayerService
+/// Orchestrates the full translation loop for both Translator and Subtitles
+/// modes through a single persistent Realtime API WebSocket.
 ///
-/// State machine transitions:
-///   idle → listening (session started, VAD waiting for speech)
-///   listening → translating (VAD detected speech end / response.created)
-///   translating → speaking (first audio delta received)
-///   speaking → listening (response.audio.done, playback finished)
-///   * → error (on unrecoverable error)
+/// ── Unified architecture ──────────────────────────────────────────────────
+///
+///   Both modes use the same pipeline:
+///     Mic → GrokApiService (Realtime WS) → VAD → Whisper transcript
+///       → _triggerTranslation() → requestTranslation()
+///         Translator: audio + text response → AudioPlayerService → speaker
+///         Subtitles:  text-only response   → partialTranscript → messages
+///
+///   The previous separate STT WebSocket + REST translate path for Subtitles
+///   has been removed. The Realtime API handles both modes natively.
+///
+/// ── State machine ─────────────────────────────────────────────────────────
+///   idle       → listening   (session started, VAD waiting for speech)
+///   listening  → translating (VAD speech-stop / transcript accumulator fires)
+///   translating→ speaking    (first audio delta received — Translator only)
+///   speaking   → listening   (audio.done + playback complete)
+///   *          → error       (unrecoverable error)
 class ConversationController extends StateNotifier<ConversationState> {
   ConversationController({
     required GrokApiService apiService,
     required GrokAudioService audioService,
     required AudioPlayerService playerService,
     required PreferencesService prefsService,
-    required SttService sttService,
   })  : _api = apiService,
         _audio = audioService,
         _player = playerService,
         _prefs = prefsService,
-        _stt = sttService,
         super(const ConversationState()) {
     _init();
   }
@@ -91,16 +90,11 @@ class ConversationController extends StateNotifier<ConversationState> {
   final GrokAudioService _audio;
   final AudioPlayerService _player;
   final PreferencesService _prefs;
-  final SttService _stt;
-  final _translate = ChatTranslationService();
   final Logger _log = Logger(printer: PrettyPrinter(methodCount: 0));
   final _uuid = const Uuid();
 
   StreamSubscription? _apiEventSub;
   StreamSubscription? _micSub;
-  StreamSubscription? _sttSub;       // STT transcript stream (subtitles mode)
-  StreamSubscription? _sttMicSub;    // raw bytes → STT (subtitles mode)
-  StreamSubscription? _sttConnSub;   // STT connection status (subtitles mode)
   StreamSubscription? _connectionSub;
   StreamSubscription? _playerSub;
 
@@ -113,30 +107,18 @@ class ConversationController extends StateNotifier<ConversationState> {
   Speaker? _pendingSpeaker;
   bool _responseMessageAdded = false;
 
-  // Prevents a second translation firing while the first is still in flight
-  // (stops echo loops where speaker audio re-enters the mic).
+  // Translator mode: true while a response is in-flight (including audio
+  // playback). Prevents echo from the speaker triggering a second translation.
+  // Subtitles mode: true while the text response is being generated.
   bool _translationInFlight = false;
 
-  // Set to true in startSession(); cleared when session.updated is received.
-  // The mic is only started after session.updated so that the server has
-  // applied create_response:false before any audio arrives — prevents the
-  // default assistant auto-response firing in the brief window between
-  // WebSocket open and session.update being processed.
+  // Set to true when the session starts; cleared when session.updated is
+  // received. The mic only starts after session.updated so the server has
+  // applied create_response:false before any audio arrives.
   bool _pendingSessionReady = false;
 
   Timer? _transcriptDebounce;
   final StringBuffer _transcriptAccumulator = StringBuffer();
-
-  // ── Subtitles mode ─────────────────────────────────────────────────────────
-  // True while an async translate() HTTP call is in-flight. Prevents a second
-  // concurrent translate from being triggered by duplicate final events that
-  // arrive while the first call is awaiting a response.
-  bool _sttTranslating = false;
-  // Last text that was sent to translate. Provides a fast exact-text guard
-  // so that identical final/speechFinal events from the same utterance (a
-  // common xAI STT pattern) never schedule a second translate call.
-  String? _lastSttText;
-  Timer? _sttDebounce;
 
   void _init() {
     final langCfg = _prefs.getLanguageConfig();
@@ -150,21 +132,17 @@ class ConversationController extends StateNotifier<ConversationState> {
       subtitlesEnabled: subtitles,
     );
 
-    // Listen to WebSocket events
     _apiEventSub = _api.events.listen(_handleApiEvent);
-    // Realtime API connection status (translator mode).
-    // Subtitles mode connection status is handled by _sttConnSub which is
-    // set up (and re-set on reconnect) inside _startSubtitlesSession().
+
+    // Both modes use the Realtime API — track connection status for both.
     _connectionSub = _api.connectionStatus.listen((connected) {
-      if (state.appMode != AppMode.subtitles) {
-        state = state.copyWith(isConnected: connected);
-      }
+      state = state.copyWith(isConnected: connected);
     });
-    // Listen to playback state to update UI and gate the mic.
-    // _translationInFlight is cleared here (not in responseDone) so that
-    // the lock persists through the full audio playback — any audio that
-    // slips past the gating before playing=false would otherwise trigger
-    // a phantom second translation and corrupt the _translateForward counter.
+
+    // _translationInFlight is cleared here (not in responseDone) for
+    // Translator mode so the lock persists through full audio playback.
+    // Any audio that slips past the mic gate before playing=false would
+    // otherwise trigger a phantom second translation.
     _playerSub = _player.playingStream.listen((playing) {
       if (playing) {
         _audio.setPlaying(true);
@@ -183,16 +161,11 @@ class ConversationController extends StateNotifier<ConversationState> {
   // Public API
   // ---------------------------------------------------------------------------
 
-  /// Start a translation session.
-  ///
-  /// The API key is held exclusively on the Cloudflare Worker proxy —
-  /// no key is required or stored on device.
+  /// Start a session. Both Translator and Subtitles modes connect to the same
+  /// Grok Realtime WebSocket; the session `appMode` drives the system prompt,
+  /// response modalities, and translation direction logic.
   Future<void> startSession() async {
-    // Clean up any previous session before starting a new one — prevents
-    // stale realtime-API events or STT connections from leaking in.
-    if (state.isSessionActive) {
-      await endSession();
-    }
+    if (state.isSessionActive) await endSession();
 
     state = state.copyWith(
       isSessionActive: true,
@@ -201,109 +174,6 @@ class ConversationController extends StateNotifier<ConversationState> {
     );
     _setStatus(ConversationStatus.listening);
 
-    if (state.appMode == AppMode.subtitles) {
-      await _startSubtitlesSession();
-    } else {
-      await _startTranslatorSession();
-    }
-  }
-
-  /// Subtitles mode: STT streaming for live captions + REST API for translation.
-  Future<void> _startSubtitlesSession() async {
-    final micStarted = await _audio.startRecording();
-    if (!micStarted) {
-      _setError('Microphone permission denied or unavailable.');
-      return;
-    }
-
-    await _stt.connect();
-
-    final rawStream = _audio.rawMicBytes;
-    if (rawStream == null) {
-      _log.e('rawMicBytes stream unavailable — subtitles mode cannot function.');
-      _setError('Microphone audio stream unavailable.');
-      return;
-    }
-
-    // Subscribes (or re-subscribes) the raw PCM forwarder to the STT service.
-    // Called once at session start and again on every STT reconnect so that
-    // mic bytes always flow to the latest WebSocket instance.
-    void wireMic() {
-      _sttMicSub?.cancel();
-      _sttMicSub = rawStream.listen((bytes) => _stt.sendAudio(bytes));
-    }
-    wireMic();
-
-    // Re-wire mic on every STT reconnect (the xAI STT API closes the socket
-    // after each utterance; SttService opens a new one automatically).
-    _sttConnSub?.cancel();
-    _sttConnSub = _stt.connectionStatus.listen((connected) {
-      state = state.copyWith(isConnected: connected);
-      if (connected && state.isSessionActive) wireMic();
-    });
-
-    final targetLang = (state.languageConfig?.autoDetect == false)
-        ? state.languageConfig!.lang2Name
-        : 'English';
-
-    _sttSub = _stt.transcripts.listen((event) {
-      if (event.text.isEmpty) return;
-
-      // Show live caption for in-progress speech; don't trigger translation yet.
-      if (!event.isFinal && !event.speechFinal) {
-        state = state.copyWith(partialTranscript: event.text);
-        _setStatus(ConversationStatus.translating);
-        return;
-      }
-
-      final clean = event.text.trim();
-      if (clean.isEmpty) return;
-
-      // ── Deduplication guards ────────────────────────────────────────────
-      // Guard 1: exact-text match — the xAI STT API routinely fires both
-      //   transcript.partial {is_final: true} AND transcript.done for the
-      //   same text. Without this check the same phrase translates twice.
-      if (clean == _lastSttText) return;
-
-      // Guard 2: in-flight lock — an async translate() call is already
-      //   running for this utterance. The async timer callback cleared the
-      //   lock only after the HTTP call returned, so any duplicate final
-      //   event that arrives during the await is silently dropped.
-      if (_sttTranslating) return;
-
-      if (event.language != null) _updateDetectedLanguage(event.language!);
-
-      // Debounce to absorb any further final events for this utterance
-      // before committing to the HTTP translation call.
-      _lastSttText = clean;
-      _sttDebounce?.cancel();
-      _sttDebounce = Timer(const Duration(milliseconds: 500), () async {
-        if (!state.isSessionActive) return;
-
-        _sttTranslating = true;
-        state = state.copyWith(partialTranscript: '');
-        _setStatus(ConversationStatus.translating);
-        try {
-          _log.i('[STT] "$clean" → $targetLang');
-          final translation = await _translate.translate(clean, targetLang);
-          if (translation != null && translation.isNotEmpty) {
-            _addSubtitleMessage(translation, targetLang);
-          }
-        } finally {
-          // Always release the lock and clear the text guard so the next
-          // utterance can proceed — even if translate() threw or returned null.
-          _sttTranslating = false;
-          _lastSttText = null;
-          if (state.isSessionActive) _setStatus(ConversationStatus.listening);
-        }
-      });
-    });
-
-    _log.i('Subtitles session started (STT streaming).');
-  }
-
-  /// Translator mode: Realtime API with manual injection.
-  Future<void> _startTranslatorSession() async {
     final langCfg = state.languageConfig ?? const LanguageConfig();
     final vadSettings = VadSettings(
       threshold: state.vadThreshold,
@@ -316,46 +186,21 @@ class ConversationController extends StateNotifier<ConversationState> {
       appMode: state.appMode,
     );
 
-    // Mic is started in _onSessionReady() once session.updated is received.
+    // Mic starts in _onSessionReady() once session.updated is received,
+    // ensuring create_response:false is applied before any audio arrives.
     _pendingSessionReady = true;
-    _log.i('Translator session started — waiting for session.updated before mic.');
+    _log.i('Session starting (${state.appMode.name}) — '
+        'waiting for session.updated before mic.');
   }
 
-  void _addSubtitleMessage(String translatedText, String toLang) {
-    final sanitized = _sanitizeTranslation(translatedText);
-    if (sanitized.isEmpty) return;
-    final msg = TranslationMessage(
-      id: _uuid.v4(),
-      speaker: Speaker.user1,
-      originalText: '',
-      translatedText: sanitized,
-      fromLanguage: state.detectedLang1 ?? '',
-      toLanguage: toLang,
-      timestamp: DateTime.now(),
-    );
-    state = state.copyWith(messages: [...state.messages, msg]);
-  }
-
-  /// End the translation session and release resources.
+  /// End the session and release all resources.
   Future<void> endSession() async {
     _pendingSessionReady = false;
-    _sttDebounce?.cancel();
-    _sttTranslating = false;
-    _lastSttText = null;
-    // Translator mode subscriptions
+    _transcriptDebounce?.cancel();
+    _transcriptAccumulator.clear();
+
     await _micSub?.cancel();
     _micSub = null;
-    // Subtitles mode subscriptions
-    await _sttConnSub?.cancel();
-    _sttConnSub = null;
-    await _sttSub?.cancel();
-    _sttSub = null;
-    await _sttMicSub?.cancel();
-    _sttMicSub = null;
-    // Signal end-of-audio before closing so the server can flush any buffered
-    // audio and produce a final transcript for the current utterance.
-    _stt.finishAudio();
-    await _stt.disconnect();
 
     await _audio.stopRecording();
     await _api.disconnect();
@@ -371,16 +216,15 @@ class ConversationController extends StateNotifier<ConversationState> {
     _log.i('Session ended.');
   }
 
-  /// Switch between translator and subtitles mode.
+  /// Switch between Translator and Subtitles mode.
   void setAppMode(AppMode mode) {
     state = state.copyWith(appMode: mode);
   }
 
-  /// Update language config (persisted).
+  /// Update language config (persisted). Updates the live session if active.
   Future<void> setLanguageConfig(LanguageConfig cfg) async {
     state = state.copyWith(languageConfig: cfg);
     await _prefs.setLanguageConfig(cfg);
-    // If session is active, update Grok with new language config
     if (state.isSessionActive) {
       _api.updateSession(
         languageConfig: cfg,
@@ -436,7 +280,7 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.inputAudioBufferSpeechStarted:
-        // Server VAD detected voice – barge-in: cancel any in-progress response
+        // Barge-in: cancel any in-progress response when the user speaks.
         if (state.status == ConversationStatus.speaking) {
           _api.cancelResponse();
           _player.stop();
@@ -447,9 +291,8 @@ class ConversationController extends StateNotifier<ConversationState> {
       case GrokServerEventType.inputAudioBufferSpeechStopped:
         _setStatus(ConversationStatus.translating);
         _transcriptBuffer.clear();
-        // Shorten the debounce window now that speech has definitively stopped.
-        // If we already have accumulated text, fire sooner (400ms) rather than
-        // waiting the full 1.2s — the transcription event(s) should arrive shortly.
+        // If we already have accumulated text, fire a shorter debounce now
+        // that speech has definitively stopped (transcription should arrive soon).
         if (_transcriptAccumulator.isNotEmpty) {
           _transcriptDebounce?.cancel();
           _transcriptDebounce = Timer(const Duration(milliseconds: 400), () {
@@ -470,18 +313,14 @@ class ConversationController extends StateNotifier<ConversationState> {
                 '')
             .trim();
 
-        // Subtitles mode uses create_response:true — the server auto-responds
-        // to every VAD segment so no accumulator/debounce/injection is needed.
-        // Just update the language label (above) and move on.
-        if (state.appMode == AppMode.subtitles) break;
-
-        // Translator mode: accumulate transcript and trigger translation.
-        // Skip duplicates — VAD sometimes fires multiple events for the same
-        // segment, or successive events where one is a superset of the other.
+        // Accumulate and debounce — same logic for both Translator and Subtitles.
+        // (Previously Subtitles mode short-circuited here because it used
+        // create_response:true. Now both modes use create_response:false and
+        // the same manual injection pipeline.)
         final accumulated = _transcriptAccumulator.toString().trim();
         final alreadyInAccumulator = accumulated == rawText ||
             accumulated.endsWith(rawText) ||
-            rawText.contains(accumulated) && accumulated.isNotEmpty;
+            (rawText.contains(accumulated) && accumulated.isNotEmpty);
         if (rawText.isNotEmpty &&
             !alreadyInAccumulator &&
             !_translationInFlight) {
@@ -505,7 +344,6 @@ class ConversationController extends StateNotifier<ConversationState> {
 
       case GrokServerEventType.responseAudioDelta:
         if (event.audioDelta != null && event.audioDelta!.isNotEmpty) {
-          // First delta: begin buffering
           if (state.status != ConversationStatus.speaking) {
             _player.beginBuffering();
             _setStatus(ConversationStatus.speaking);
@@ -515,7 +353,6 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.responseAudioDone:
-        // All audio deltas received – play the assembled buffer
         _player.finishAndPlay();
         break;
 
@@ -537,19 +374,19 @@ class ConversationController extends StateNotifier<ConversationState> {
         _transcriptBuffer.clear();
         break;
 
-      // Text-only mode (subtitles): stream translated text directly
+      // Text-only response (Subtitles mode): stream translated text directly.
       case GrokServerEventType.responseTextDelta:
         if (event.transcriptDelta != null) {
           _transcriptBuffer.write(event.transcriptDelta);
-          // Strip the LANG:[code] prefix from the streaming preview.
-          // The model may use a newline OR a space after the code.
+          // Strip the LANG:[code] prefix while streaming — hide it until the
+          // full code is received, then show only the translated text.
           final raw = _transcriptBuffer.toString();
           final langPrefixMatch =
               RegExp(r'^LANG:[a-zA-Z]{2,3}\s+').firstMatch(raw);
           final visible = langPrefixMatch != null
               ? raw.substring(langPrefixMatch.end)
               : raw.startsWith('LANG:')
-                  ? '' // prefix still streaming, hide until complete
+                  ? ''
                   : raw;
           state = state.copyWith(partialTranscript: visible);
         }
@@ -574,37 +411,28 @@ class ConversationController extends StateNotifier<ConversationState> {
           state = state.copyWith(partialTranscript: '');
         }
         _responseMessageAdded = false;
+        // Clean up injected history and accumulated text after every turn.
+        _transcriptAccumulator.clear();
+        _transcriptDebounce?.cancel();
+        _api.clearConversationHistory();
 
         if (state.appMode == AppMode.subtitles) {
-          // Subtitles has no audio playback — release the lock immediately.
+          // Text-only: no audio playback, release the lock immediately.
           _translationInFlight = false;
-          _resetSubtitlesToListening();
-        } else {
-          // Translator: _translationInFlight stays true until audio playback
-          // ends (the playing=false branch of the player stream listener).
-          // Releasing it here (before playback) would let echo from the
-          // speaker corrupt the _translateForward alternation counter.
-          _transcriptAccumulator.clear();
-          _transcriptDebounce?.cancel();
-          _api.clearConversationHistory();
+          _resetToListening();
         }
+        // Translator: _translationInFlight is released by the playing=false
+        // listener after audio finishes — not here.
         break;
 
       case GrokServerEventType.error:
         final errMsg = event.errorMessage ?? 'Unknown API error';
-        // Non-critical errors: item deletes hitting already-removed items,
-        // or response.cancel with no active response. Log only — do not
-        // surface as a UI error banner.
         final isNonCritical = errMsg.toLowerCase().contains('not found') ||
             errMsg.toLowerCase().contains('no response') ||
             errMsg.toLowerCase().contains('cancel');
         if (isNonCritical) {
           _log.w('Non-critical API error (suppressed): $errMsg');
-          // In subtitles mode make sure we return to listening even after
-          // a suppressed error so the session doesn't silently get stuck.
-          if (state.appMode == AppMode.subtitles) {
-            _resetSubtitlesToListening();
-          }
+          if (state.appMode == AppMode.subtitles) _resetToListening();
         } else {
           _setError(errMsg);
         }
@@ -621,11 +449,9 @@ class ConversationController extends StateNotifier<ConversationState> {
     final from = _pendingFrom ?? (state.languageConfig?.lang1Name ?? 'Language 1');
     final to = _pendingTo ?? (state.languageConfig?.lang2Name ?? 'Language 2');
 
-    // Extract LANG:[code] prefix that the model adds in subtitles mode.
-    // Work entirely on the trimmed string so match indices are consistent.
+    // Extract LANG:[code] prefix the model adds in Subtitles mode.
     String textForSanitization = translatedText.trim();
     if (textForSanitization.startsWith('LANG:')) {
-      // Find the end of the language code (2-3 letters after the colon)
       final wsIdx = textForSanitization.indexOf(RegExp(r'\s'), 5);
       if (wsIdx > 5) {
         final code = textForSanitization.substring(5, wsIdx);
@@ -638,7 +464,6 @@ class ConversationController extends StateNotifier<ConversationState> {
       }
     }
 
-    // Strip any framing tags the model may accidentally echo back.
     final sanitized = _sanitizeTranslation(textForSanitization);
 
     final msg = TranslationMessage(
@@ -658,26 +483,29 @@ class ConversationController extends StateNotifier<ConversationState> {
   }
 
   /// Called once we have a full transcript — fires one translation request.
-  /// Only used in translator mode; subtitles mode uses create_response:true
-  /// so the server auto-responds to every VAD segment without client injection.
+  ///
+  /// Both Translator and Subtitles modes call this method.
+  ///   Translator: audio + text response, bidirectional speaker alternation.
+  ///   Subtitles:  text-only response, always FROM detected lang TO target.
   void _triggerTranslation(String transcript) {
     final cfg = state.languageConfig ?? const LanguageConfig();
-    if (state.appMode == AppMode.subtitles) return; // guard: should not be reached
 
     final String fromLang;
     final String toLang;
     final Speaker speaker;
 
-    if (cfg.autoDetect) {
-      // Use detected language names for the FROM/TO pair so the model has
-      // a concrete target. Speaker attribution uses _translateForward just
-      // like fixed-language mode — relying on state.activeSpeaker alone is
-      // fragile because the xAI API does not always return a language code
-      // in the transcription event, leaving activeSpeaker stuck on User1.
+    if (state.appMode == AppMode.subtitles) {
+      // Subtitles: always translate from the detected/spoken language to the
+      // configured target language. No per-speaker alternation.
+      fromLang = state.detectedLang1 ?? 'the detected language';
+      toLang = cfg.autoDetect ? 'English' : cfg.lang2Name;
+      speaker = Speaker.user1;
+    } else if (cfg.autoDetect) {
+      // Translator auto-detect: _translateForward gives reliable alternation
+      // regardless of whether the API returns a language code.
       final d1 = state.detectedLang1 ?? 'the detected language';
       final d2 = state.detectedLang2 ??
           (d1.toLowerCase() == 'english' ? 'French' : 'English');
-
       if (_translateForward) {
         fromLang = d1; toLang = d2; speaker = Speaker.user1;
       } else {
@@ -685,6 +513,7 @@ class ConversationController extends StateNotifier<ConversationState> {
       }
       _translateForward = !_translateForward;
     } else {
+      // Translator fixed-language: alternate speakers.
       if (_translateForward) {
         fromLang = cfg.lang1Name; toLang = cfg.lang2Name; speaker = Speaker.user1;
       } else {
@@ -697,10 +526,10 @@ class ConversationController extends StateNotifier<ConversationState> {
     _pendingTo = toLang;
     _pendingSpeaker = speaker;
     _responseMessageAdded = false;
-    _translationInFlight = true; // block new transcriptions until response done
+    _translationInFlight = true;
 
     final textOnly = state.appMode == AppMode.subtitles;
-    _log.i('[${textOnly ? "text" : "voice"} $fromLang → $toLang] "$transcript"');
+    _log.i('[${textOnly ? "subtitle" : "voice"} $fromLang → $toLang] "$transcript"');
 
     _api.requestTranslation(
       transcript: transcript,
@@ -713,18 +542,13 @@ class ConversationController extends StateNotifier<ConversationState> {
   /// Remove any prompt framing the model may echo back verbatim.
   String _sanitizeTranslation(String text) {
     var cleaned = text;
-    // Fallback LANG: strip in case _addMessage() didn't catch it
     cleaned = cleaned.replaceAll(RegExp(r'^LANG:[a-zA-Z]{2,3}\s+', multiLine: false), '');
-    // Strip trailing "end" / "END" markers the model sometimes appends
     cleaned = cleaned.replaceAll(RegExp(r'\s+[Ee][Nn][Dd]\s*$'), '');
-    // Strip any injected task-header lines the model might parrot back
     cleaned = cleaned.replaceAll(RegExp(r'^SUBTITLE_TASK\s*\|[^\n]*\n?', multiLine: true), '');
     cleaned = cleaned.replaceAll(RegExp(r'^TRANSLATE\s*\|[^\n]*\n?', multiLine: true), '');
     cleaned = cleaned.replaceAll(RegExp(r'^INPUT:\s*', multiLine: true), '');
-    // Old [TEXT_TO_TRANSLATE ...] tags
     cleaned = cleaned.replaceAll(RegExp(r'\[TEXT_TO_TRANSLATE[^\]]*\]'), '');
     cleaned = cleaned.replaceAll(RegExp(r'\[/TEXT_TO_TRANSLATE\]'), '');
-    // Strip surrounding quotes
     cleaned = cleaned.trim();
     if (cleaned.startsWith('"') && cleaned.endsWith('"') && cleaned.length >= 2) {
       cleaned = cleaned.substring(1, cleaned.length - 1).trim();
@@ -734,13 +558,12 @@ class ConversationController extends StateNotifier<ConversationState> {
 
   /// Map ISO-639-1 code → display name + flag using the supported languages list.
   void _updateDetectedLanguage(String isoCode) {
-    final code = isoCode.toLowerCase().split('-').first; // 'en-US' → 'en'
+    final code = isoCode.toLowerCase().split('-').first;
     final match = kSupportedLanguages.firstWhere(
       (l) => l.code == code,
       orElse: () => SupportedLanguage(code, _capitalize(code), '🌐'),
     );
 
-    // Assign alternately: first detection → lang1, second different → lang2
     if (state.detectedLang1 == null) {
       state = state.copyWith(
         detectedLang1: match.name,
@@ -756,7 +579,6 @@ class ConversationController extends StateNotifier<ConversationState> {
         activeSpeaker: Speaker.user2,
       );
     } else {
-      // Both languages known — track which one is speaking
       state = state.copyWith(
         activeSpeaker: match.name == state.detectedLang2
             ? Speaker.user2
@@ -769,7 +591,7 @@ class ConversationController extends StateNotifier<ConversationState> {
       s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
 
   /// Called when session.updated is received — starts the mic now that the
-  /// server has applied create_response:false and our translator instructions.
+  /// server has applied create_response:false and the session instructions.
   Future<void> _onSessionReady() async {
     if (_micSub != null) return; // already started (reconnect path)
     final micStarted = await _audio.startRecording();
@@ -783,10 +605,9 @@ class ConversationController extends StateNotifier<ConversationState> {
     _log.i('Mic started after session.updated confirmed.');
   }
 
-  /// Reset subtitles mode back to listening after a translation completes or
-  /// an error occurs. Subtitles mode has no audio player, so the normal
-  /// player-callback path never fires — this must be called explicitly.
-  void _resetSubtitlesToListening() {
+  /// Reset back to listening after a Subtitles translation completes or an
+  /// error occurs (no audio playback path exists to trigger the reset).
+  void _resetToListening() {
     if (!state.isSessionActive) return;
     _translationInFlight = false;
     _transcriptBuffer.clear();
@@ -811,12 +632,8 @@ class ConversationController extends StateNotifier<ConversationState> {
   @override
   void dispose() {
     _transcriptDebounce?.cancel();
-    _sttDebounce?.cancel();
     _apiEventSub?.cancel();
     _micSub?.cancel();
-    _sttSub?.cancel();
-    _sttMicSub?.cancel();
-    _sttConnSub?.cancel();
     _connectionSub?.cancel();
     _playerSub?.cancel();
     super.dispose();

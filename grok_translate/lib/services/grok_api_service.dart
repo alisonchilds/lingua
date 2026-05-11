@@ -360,11 +360,11 @@ class GrokApiService {
           'threshold': vadSettings.threshold,
           'prefix_padding_ms': 300,
           'silence_duration_ms': vadSettings.silenceDurationMs,
-          // Subtitles: true — server auto-responds to every VAD segment so
-          // the session runs continuously without any client-side injection.
-          // Translator: false — we intercept the transcript and inject a
+          // Always false: we intercept every VAD transcript and inject a
           // direction-aware translation command before requesting a response.
-          'create_response': _appMode == AppMode.subtitles,
+          // This applies to both translator and subtitles modes — both now
+          // route through the same Realtime WS pipeline.
+          'create_response': false,
         },
       },
     });
