@@ -313,8 +313,11 @@ class ConversationController extends StateNotifier<ConversationState> {
                 milliseconds:
                     state.appMode == AppMode.subtitles ? 300 : 400),
             () {
-              final full = _transcriptAccumulator.toString().trim();
+              var full = _transcriptAccumulator.toString().trim();
               _transcriptAccumulator.clear();
+              if (state.appMode == AppMode.subtitles) {
+                full = _deduplicateEcho(full);
+              }
               if (full.isNotEmpty) _triggerTranslation(full);
             },
           );
@@ -366,8 +369,11 @@ class ConversationController extends StateNotifier<ConversationState> {
               milliseconds:
                   state.appMode == AppMode.subtitles ? 600 : 1200),
           () {
-            final full = _transcriptAccumulator.toString().trim();
+            var full = _transcriptAccumulator.toString().trim();
             _transcriptAccumulator.clear();
+            if (state.appMode == AppMode.subtitles) {
+              full = _deduplicateEcho(full);
+            }
             if (full.isNotEmpty && !_translationInFlight) {
               _triggerTranslation(full);
             }
@@ -669,6 +675,38 @@ class ConversationController extends StateNotifier<ConversationState> {
       _api.appendAudio(b64chunk);
     });
     _log.i('Mic started after session.updated confirmed.');
+  }
+
+  /// Remove consecutive sentence repetitions caused by microphone echo.
+  ///
+  /// When the device mic picks up room echo, Whisper transcribes the original
+  /// speech and its reflection as one segment: "anything, Jeff? anything, Jeff?"
+  /// This strips the duplicate so only one copy reaches the subtitle display.
+  ///
+  /// Heuristic: find the first sentence boundary ([.!?] followed by whitespace),
+  /// then check whether the remainder of the string matches the first sentence.
+  /// Applies only to subtitles mode where each VAD commit is one phrase.
+  String _deduplicateEcho(String text) {
+    final t = text.trim();
+    if (t.length < 6) return t;
+
+    final boundary = RegExp(r'[.!?]\s+');
+    final m = boundary.firstMatch(t);
+    if (m == null) return t;
+
+    final first = t.substring(0, m.end).trim();
+    final rest = t.substring(m.end).trim();
+
+    // Strip trailing punctuation for a looser comparison so
+    // "Yeah?" vs "Yeah" (or period vs question mark) still deduplicate.
+    String norm(String s) =>
+        s.toLowerCase().replaceAll(RegExp(r'[^\w\s]'), '').trim();
+
+    if (norm(rest) == norm(first) ||
+        norm(rest).startsWith(norm(first))) {
+      return first;
+    }
+    return t;
   }
 
   /// Reset back to listening after a Subtitles translation completes or an
