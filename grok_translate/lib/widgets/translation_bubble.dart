@@ -77,8 +77,12 @@ class TranslationBubble extends StatelessWidget {
                         color: borderColor, shape: BoxShape.circle),
                   ),
                   const SizedBox(width: 6),
+                  // Show the language pair so attribution is always clear,
+                  // regardless of whether speaker detection is accurate.
                   Text(
-                    '${isUser1 ? 'User 1' : 'User 2'} · ${message.toLanguage}',
+                    message.fromLanguage.isNotEmpty
+                        ? '${message.fromLanguage} → ${message.toLanguage}'
+                        : message.toLanguage,
                     style: theme.textTheme.labelSmall
                         ?.copyWith(color: borderColor),
                   ),

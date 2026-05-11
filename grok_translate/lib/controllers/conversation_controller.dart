@@ -158,13 +158,18 @@ class ConversationController extends StateNotifier<ConversationState> {
         state = state.copyWith(isConnected: connected);
       }
     });
-    // Listen to playback state to update UI
+    // Listen to playback state to update UI and gate the mic.
+    // _translationInFlight is cleared here (not in responseDone) so that
+    // the lock persists through the full audio playback — any audio that
+    // slips past the gating before playing=false would otherwise trigger
+    // a phantom second translation and corrupt the _translateForward counter.
     _playerSub = _player.playingStream.listen((playing) {
       if (playing) {
         _audio.setPlaying(true);
         _setStatus(ConversationStatus.speaking);
       } else {
         _audio.setPlaying(false);
+        _translationInFlight = false;
         if (state.isSessionActive) {
           _setStatus(ConversationStatus.listening);
         }
@@ -542,16 +547,16 @@ class ConversationController extends StateNotifier<ConversationState> {
           state = state.copyWith(partialTranscript: '');
         }
         _responseMessageAdded = false;
-        _translationInFlight = false;
 
         if (state.appMode == AppMode.subtitles) {
-          // Subtitles: create_response:true means the server auto-generates
-          // the next response. No injection or history management needed.
-          // Just reset status so the UI shows we're ready for the next phrase.
+          // Subtitles has no audio playback — release the lock immediately.
+          _translationInFlight = false;
           _resetSubtitlesToListening();
         } else {
-          // Translator: clear mic echo that crept in during playback, then
-          // clean up the injected conversation items for this turn.
+          // Translator: _translationInFlight stays true until audio playback
+          // ends (the playing=false branch of the player stream listener).
+          // Releasing it here (before playback) would let echo from the
+          // speaker corrupt the _translateForward alternation counter.
           _transcriptAccumulator.clear();
           _transcriptDebounce?.cancel();
           _api.clearConversationHistory();
@@ -637,30 +642,27 @@ class ConversationController extends StateNotifier<ConversationState> {
     final Speaker speaker;
 
     if (cfg.autoDetect) {
-      // Use the speaker identity from language detection rather than a blind
-      // toggle. This correctly handles the case where the same person speaks
-      // twice in a row and avoids passing 'the other language' (a meaningless
-      // target) to the model when only one language has been identified yet.
-      final currentSpeaker = state.activeSpeaker ?? Speaker.user1;
+      // Use detected language names for the FROM/TO pair so the model has
+      // a concrete target. Speaker attribution uses _translateForward just
+      // like fixed-language mode — relying on state.activeSpeaker alone is
+      // fragile because the xAI API does not always return a language code
+      // in the transcription event, leaving activeSpeaker stuck on User1.
       final d1 = state.detectedLang1 ?? 'the detected language';
-      // If the second language hasn't been detected yet, fall back to English
-      // (or French if the first language is already English). This gives the
-      // model a concrete, unambiguous target language.
       final d2 = state.detectedLang2 ??
           (d1.toLowerCase() == 'english' ? 'French' : 'English');
 
-      if (currentSpeaker == Speaker.user1) {
+      if (_translateForward) {
         fromLang = d1; toLang = d2; speaker = Speaker.user1;
       } else {
         fromLang = d2; toLang = d1; speaker = Speaker.user2;
       }
+      _translateForward = !_translateForward;
     } else {
       if (_translateForward) {
         fromLang = cfg.lang1Name; toLang = cfg.lang2Name; speaker = Speaker.user1;
       } else {
         fromLang = cfg.lang2Name; toLang = cfg.lang1Name; speaker = Speaker.user2;
       }
-      // Flip direction for next utterance in fixed-language mode only
       _translateForward = !_translateForward;
     }
 

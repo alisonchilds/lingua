@@ -48,6 +48,9 @@ class AudioPlayerService {
     if (!_isBuffering || _pcmChunks.isEmpty) {
       _isBuffering = false;
       _pcmChunks.clear();
+      // Emit playing=false even for an empty buffer so the controller's
+      // playingStream listener always fires and can reset _translationInFlight.
+      _playingController.add(false);
       return;
     }
     _isBuffering = false;
