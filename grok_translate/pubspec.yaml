@@ -19,15 +19,10 @@ dependencies:
 
   # Audio I/O
   just_audio: ^0.9.40
-  flutter_sound: ^9.2.13
   record: ^5.1.2          # Cross-platform mic capture (web + mobile)
-  audioplayers: ^6.0.0    # Fallback audio playback for PCM bytes on web
 
   # WebSocket
   web_socket_channel: ^3.0.1
-
-  # HTTP (used for chat translation REST calls in subtitles mode)
-  http: ^1.2.0
 
   # Models
   freezed_annotation: ^2.4.1

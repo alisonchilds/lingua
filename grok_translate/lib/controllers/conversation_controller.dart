@@ -280,12 +280,18 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.inputAudioBufferSpeechStarted:
-        // Barge-in: cancel any in-progress response when the user speaks.
+        // Barge-in (Translator): cancel any in-progress audio response.
         if (state.status == ConversationStatus.speaking) {
           _api.cancelResponse();
           _player.stop();
         }
-        _setStatus(ConversationStatus.listening);
+        // Subtitles: reset to listening and clear the previous translation's
+        // streamed text so the screen is clean before the new phrase arrives.
+        if (state.appMode == AppMode.subtitles) {
+          _resetToListening();
+        } else {
+          _setStatus(ConversationStatus.listening);
+        }
         break;
 
       case GrokServerEventType.inputAudioBufferSpeechStopped:
@@ -295,11 +301,16 @@ class ConversationController extends StateNotifier<ConversationState> {
         // that speech has definitively stopped (transcription should arrive soon).
         if (_transcriptAccumulator.isNotEmpty) {
           _transcriptDebounce?.cancel();
-          _transcriptDebounce = Timer(const Duration(milliseconds: 400), () {
-            final full = _transcriptAccumulator.toString().trim();
-            _transcriptAccumulator.clear();
-            if (full.isNotEmpty) _triggerTranslation(full);
-          });
+          _transcriptDebounce = Timer(
+            Duration(
+                milliseconds:
+                    state.appMode == AppMode.subtitles ? 300 : 400),
+            () {
+              final full = _transcriptAccumulator.toString().trim();
+              _transcriptAccumulator.clear();
+              if (full.isNotEmpty) _triggerTranslation(full);
+            },
+          );
         }
         break;
 
@@ -328,12 +339,19 @@ class ConversationController extends StateNotifier<ConversationState> {
             ..write(_transcriptAccumulator.isNotEmpty ? ' ' : '')
             ..write(rawText);
           _transcriptDebounce?.cancel();
-          _transcriptDebounce =
-              Timer(const Duration(milliseconds: 1200), () {
-            final full = _transcriptAccumulator.toString().trim();
-            _transcriptAccumulator.clear();
-            if (full.isNotEmpty) _triggerTranslation(full);
-          });
+          // Subtitles phrases are short and self-contained — 600 ms is
+          // enough to absorb duplicate events without feeling laggy.
+          // Translator allows 1 200 ms so multi-chunk phrases accumulate.
+          _transcriptDebounce = Timer(
+            Duration(
+                milliseconds:
+                    state.appMode == AppMode.subtitles ? 600 : 1200),
+            () {
+              final full = _transcriptAccumulator.toString().trim();
+              _transcriptAccumulator.clear();
+              if (full.isNotEmpty) _triggerTranslation(full);
+            },
+          );
         }
         break;
 
