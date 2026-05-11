@@ -3,13 +3,17 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:logger/logger.dart';
 
+import '../config/app_config.dart';
+
 /// Translates a transcript to the target language using the Grok chat
 /// completions REST API via the Cloudflare proxy.
 ///
-/// All platforms (web and native) send requests to the proxy, which
+/// All platforms send requests to [AppConfig.translateProxyHttp], which
 /// injects the XAI_API_KEY server-side. No API key is stored on device.
+///
+/// To use a different proxy:
+///   flutter build web --dart-define=PROXY_HOST=your-worker.workers.dev
 class ChatTranslationService {
-  static const _proxyUrl = 'https://grok-voice-proxy.alison-ade.workers.dev/translate';
   static const _model = 'grok-4.3';
 
   final Logger _log = Logger(printer: PrettyPrinter(methodCount: 0));
@@ -17,7 +21,7 @@ class ChatTranslationService {
   /// Translate [text] into [targetLanguage]. Returns the translated string,
   /// or null if the request fails.
   Future<String?> translate(String text, String targetLanguage) async {
-    final url = Uri.parse(_proxyUrl);
+    final url = Uri.parse(AppConfig.translateProxyHttp);
 
     final body = jsonEncode({
       'model': _model,

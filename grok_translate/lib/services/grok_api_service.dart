@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:logger/logger.dart';
 
+import '../config/app_config.dart';
 import '../models/conversation_models.dart';
 import '../models/grok_api_models.dart';
 import 'ws_channel_stub.dart'
@@ -10,23 +11,13 @@ import 'ws_channel_stub.dart'
 
 /// Handles the persistent WebSocket connection to the Grok Realtime API.
 ///
-/// ── Security / Connection routing ────────────────────────────────────────────
+/// All platforms (Web, iOS, Android) connect to the Cloudflare Worker proxy
+/// defined by [AppConfig.realtimeProxyWs]. The worker holds the XAI_API_KEY
+/// secret server-side — no API key is ever stored on the user's device.
 ///
-///   All platforms (Web, iOS, Android)
-///   └─▶ [kProxyUrl] Cloudflare Worker proxy
-///       The worker holds the XAI_API_KEY secret server-side.
-///       No API key is ever stored on the user's device.
-///
-///   Web  → native browser WebSocket (dart:js_interop / package:web)
-///   Native → web_socket_channel (dart:io WebSocket, no auth headers needed)
-///
-/// ── How to change the proxy URL ──────────────────────────────────────────────
-///   Update [kProxyUrl] below. That is the only line you need to touch.
-/// ─────────────────────────────────────────────────────────────────────────────
+/// To use a different proxy, set PROXY_HOST at build time:
+///   flutter build web --dart-define=PROXY_HOST=your-worker.workers.dev
 class GrokApiService {
-  /// Cloudflare Worker proxy — all platforms connect here.
-  static const kProxyUrl = 'wss://grok-voice-proxy.alison-ade.workers.dev';
-
   /// Grok voice model name (sent as a query param by the proxy).
   static const _model = 'grok-voice-think-fast-1.0';
 
@@ -322,10 +313,10 @@ class GrokApiService {
     required VadSettings vadSettings,
   }) async {
     await _closeAll();
-    _log.i('Connecting → $kProxyUrl');
+    _log.i('Connecting → ${AppConfig.realtimeProxyWs}');
 
     try {
-      _ws = await NativeWebSocket.connect(Uri.parse(kProxyUrl));
+      _ws = await NativeWebSocket.connect(Uri.parse(AppConfig.realtimeProxyWs));
       _wsSub = _ws!.stream.listen(
         _onMessage,
         onError: _onError,

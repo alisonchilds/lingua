@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:logger/logger.dart';
 
+import '../config/app_config.dart';
 import 'ws_channel_stub.dart'
     if (dart.library.js_interop) 'ws_channel_web.dart';
 
@@ -31,14 +32,12 @@ class SttTranscriptEvent {
 
 /// Streams real-time partial and final transcripts from the xAI STT API.
 ///
-/// The STT endpoint accepts raw binary PCM16 audio frames and emits
-/// transcript.partial events approximately every 500 ms, making it possible
-/// to show live captions while the speaker is still talking.
-///
-/// All platforms connect through the Cloudflare proxy at [kSttProxyUrl].
+/// All platforms connect through the Cloudflare proxy ([AppConfig.sttProxyWs]).
 /// The API key is held server-side — no key is needed on device.
+///
+/// To use a different proxy:
+///   flutter build web --dart-define=PROXY_HOST=your-worker.workers.dev
 class SttService {
-  static const kSttProxyUrl = 'wss://grok-voice-proxy.alison-ade.workers.dev/stt';
 
   final Logger _log = Logger(printer: PrettyPrinter(methodCount: 0));
 
@@ -93,7 +92,7 @@ class SttService {
   Future<void> _openConnection() async {
     await _close(permanent: false); // close existing but keep auto-reconnect
 
-    final uri = Uri.parse('$kSttProxyUrl?$_queryString');
+    final uri = Uri.parse('${AppConfig.sttProxyWs}?$_queryString');
 
     _log.i('STT connecting → $uri');
 
