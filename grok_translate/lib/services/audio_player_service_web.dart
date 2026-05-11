@@ -10,7 +10,7 @@ import 'package:web/web.dart' as web;
 
 class WebAudioHelper {
   static void playWav(Uint8List wav, Completer<void> completer) {
-    // Wrap the raw bytes in a JSArray<BlobPart> and create a WAV Blob.
+    // Wrap the raw bytes in a Blob and create an object URL.
     final jsBytes = wav.buffer.toJS;
     final blobParts = [jsBytes].toJS;
     final options = web.BlobPropertyBag(type: 'audio/wav');
@@ -40,7 +40,20 @@ class WebAudioHelper {
       }.toJS,
     );
 
-    // play() returns a Promise; ignore the return value – events drive completion.
-    audio.play();
+    // play() returns a Promise that REJECTS when autoplay is blocked by the
+    // browser (e.g. AudioContext not yet resumed after a user gesture).
+    // If we ignore that rejection the completer never completes, leaving the
+    // app permanently stuck in the "speaking" state.
+    audio.play().toDart.then<void>(
+      (_) {
+        // Playback started successfully — 'ended' / 'error' drive completion.
+      },
+      onError: (dynamic e) {
+        cleanup();
+        if (!completer.isCompleted) {
+          completer.completeError('Autoplay blocked: $e');
+        }
+      },
+    );
   }
 }

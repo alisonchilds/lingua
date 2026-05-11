@@ -20,8 +20,10 @@ class AudioPlayerService {
   final Logger _log = Logger(printer: PrettyPrinter(methodCount: 0));
   final AudioPlayer _player = AudioPlayer();
 
-  // Accumulate PCM16 deltas into a full audio buffer per response
-  final List<int> _pcmBuffer = [];
+  // Accumulate PCM16 delta chunks per response.
+  // Stored as a list of Uint8List so each append is O(1) (pointer store).
+  // Concatenated into one contiguous buffer only when playback begins.
+  final List<Uint8List> _pcmChunks = [];
   bool _isBuffering = false;
 
   final _playingController = StreamController<bool>.broadcast();
@@ -31,28 +33,37 @@ class AudioPlayerService {
 
   /// Called when the first audio delta arrives from Grok.
   void beginBuffering() {
-    _pcmBuffer.clear();
+    _pcmChunks.clear();
     _isBuffering = true;
   }
 
   /// Append a base64-encoded PCM16 chunk to the current response buffer.
   void appendChunk(String base64Chunk) {
     if (!_isBuffering) return;
-    final bytes = base64Decode(base64Chunk);
-    _pcmBuffer.addAll(bytes);
+    _pcmChunks.add(base64Decode(base64Chunk));
   }
 
   /// Called when `response.audio.done` is received – play the full buffer.
   Future<void> finishAndPlay() async {
-    if (!_isBuffering || _pcmBuffer.isEmpty) {
+    if (!_isBuffering || _pcmChunks.isEmpty) {
       _isBuffering = false;
+      _pcmChunks.clear();
       return;
     }
     _isBuffering = false;
-    final pcm = Uint8List.fromList(_pcmBuffer);
+
+    // Concatenate all chunks into one contiguous Uint8List.
+    final totalLength = _pcmChunks.fold(0, (sum, c) => sum + c.length);
+    final pcm = Uint8List(totalLength);
+    var offset = 0;
+    for (final chunk in _pcmChunks) {
+      pcm.setRange(offset, offset + chunk.length, chunk);
+      offset += chunk.length;
+    }
+    _pcmChunks.clear();
+
     // Use 16 kHz to match the session audio output format configured in session.update
     final wav = GrokAudioService.pcm16ToWav(pcm, rate: GrokAudioService.sampleRate);
-    _pcmBuffer.clear();
 
     try {
       _playingController.add(true);
@@ -84,7 +95,7 @@ class AudioPlayerService {
 
   Future<void> stop() async {
     await _player.stop();
-    _pcmBuffer.clear();
+    _pcmChunks.clear();
     _isBuffering = false;
     _playingController.add(false);
   }

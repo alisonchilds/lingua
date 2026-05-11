@@ -320,6 +320,9 @@ class ConversationController extends StateNotifier<ConversationState> {
     _sttSub = null;
     await _sttMicSub?.cancel();
     _sttMicSub = null;
+    // Signal end-of-audio before closing so the server can flush any buffered
+    // audio and produce a final transcript for the current utterance.
+    _stt.finishAudio();
     await _stt.disconnect();
 
     await _audio.stopRecording();
@@ -627,21 +630,13 @@ class ConversationController extends StateNotifier<ConversationState> {
   /// so the server auto-responds to every VAD segment without client injection.
   void _triggerTranslation(String transcript) {
     final cfg = state.languageConfig ?? const LanguageConfig();
-    final isSubtitles = state.appMode == AppMode.subtitles;
-    if (isSubtitles) return; // should not be reached, guard anyway
+    if (state.appMode == AppMode.subtitles) return; // guard: should not be reached
 
     final String fromLang;
     final String toLang;
     final Speaker speaker;
 
-    if (isSubtitles) {
-      // Use the detected language name if available; fall back to 'the spoken
-      // language' so the translation command is still grammatically sensible
-      // and doesn't say "from the detected language" in the subtitle log.
-      fromLang = state.detectedLang1 ?? '';
-      toLang = cfg.autoDetect ? 'English' : cfg.lang2Name;
-      speaker = Speaker.user1;
-    } else if (cfg.autoDetect) {
+    if (cfg.autoDetect) {
       // Use the speaker identity from language detection rather than a blind
       // toggle. This correctly handles the case where the same person speaks
       // twice in a row and avoids passing 'the other language' (a meaningless

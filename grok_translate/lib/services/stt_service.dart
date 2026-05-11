@@ -57,6 +57,13 @@ class SttService {
   // the session alive indefinitely for continuous live captioning.
   bool _autoReconnect = false;
   String? _queryString; // cached so reconnect uses same params
+
+  // Consecutive error/failure reconnect counter. Reset to 0 on each successful
+  // connection (transcript.created received). Normal server-initiated closes
+  // (after each utterance) do NOT increment this — they are expected behaviour.
+  int _errorReconnectAttempts = 0;
+  static const _maxErrorReconnects = 8;
+
   // True once a final transcript event has been emitted for the current
   // utterance — prevents a duplicate when both transcript.partial {is_final}
   // and transcript.done carry the same text.
@@ -71,6 +78,7 @@ class SttService {
   Future<void> connect() async {
     _autoReconnect = true;
     _disposed = false;
+    _errorReconnectAttempts = 0;
 
     _queryString = Uri(queryParameters: {
       'sample_rate': '16000',
@@ -97,17 +105,23 @@ class SttService {
         onError: (e) {
           _log.e('STT WebSocket error: $e');
           _setConnected(false);
-          if (_autoReconnect && !_disposed) {
-            _log.i('STT reconnecting after stream error…');
-            Future.delayed(const Duration(milliseconds: 500), _openConnection);
+          if (!_autoReconnect || _disposed) return;
+          if (_errorReconnectAttempts >= _maxErrorReconnects) {
+            _log.e('STT max error reconnects reached — giving up.');
+            return;
           }
+          _errorReconnectAttempts++;
+          final delay = Duration(
+              milliseconds: (500 * _errorReconnectAttempts).clamp(500, 8000));
+          _log.i('STT reconnecting after error in ${delay.inMilliseconds}ms '
+              '(attempt $_errorReconnectAttempts)…');
+          Future.delayed(delay, _openConnection);
         },
         onDone: () {
           _log.w('STT utterance complete — connection closed.');
           _setConnected(false);
-          // The xAI STT API closes after every utterance ("each connection
-          // handles a single utterance"). Reconnect so the next phrase
-          // is captured without any action from the caller.
+          // The xAI STT API closes after every utterance. This is normal;
+          // reconnect immediately without counting it as an error.
           if (_autoReconnect && !_disposed) {
             _log.i('STT auto-reconnecting for next utterance…');
             _openConnection();
@@ -119,11 +133,18 @@ class SttService {
     } catch (e) {
       _log.e('STT connect failed: $e');
       _setConnected(false);
-      // Retry after a brief delay
-      if (_autoReconnect && !_disposed) {
-        await Future.delayed(const Duration(seconds: 1));
-        _openConnection();
+      if (!_autoReconnect || _disposed) return;
+      if (_errorReconnectAttempts >= _maxErrorReconnects) {
+        _log.e('STT max error reconnects reached — giving up.');
+        return;
       }
+      _errorReconnectAttempts++;
+      final delay = Duration(
+          milliseconds: (500 * _errorReconnectAttempts).clamp(500, 8000));
+      _log.i('STT retrying connection in ${delay.inMilliseconds}ms '
+          '(attempt $_errorReconnectAttempts)…');
+      await Future.delayed(delay);
+      _openConnection();
     }
   }
 
@@ -172,6 +193,7 @@ class SttService {
 
       if (type == 'transcript.created') {
         _log.i('STT ready — server initialized.');
+        _errorReconnectAttempts = 0; // successful connection; reset error count
         _setConnected(true);
         return;
       }
