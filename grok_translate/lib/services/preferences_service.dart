@@ -6,19 +6,20 @@ import '../models/conversation_models.dart';
 
 /// Thin wrapper around SharedPreferences for persisting user settings.
 ///
+/// API keys are managed exclusively server-side via the Cloudflare Worker
+/// proxy. No API key is ever stored on device.
+///
 /// ── Future: per-user defaults ────────────────────────────────────────────────
 /// TODO: When user accounts are added, migrate these preferences to a user
 /// profile stored server-side (e.g. Supabase / Firebase). Each user should
 /// be able to set:
-///   - defaultTargetLanguage  (e.g. "English") — used as the default "translate into"
-///     language in subtitles mode and as the pre-selected lang2 in translator mode.
-///   - defaultSourceLanguage  (e.g. "French") — pre-fill lang1 on setup.
-///   - preferredAppMode       (translator | subtitles) — open directly to their mode.
-///   - preferredVadSettings   (threshold, silenceDuration) — per-user VAD tuning.
+///   - defaultTargetLanguage  (e.g. "English")
+///   - defaultSourceLanguage  (e.g. "French")
+///   - preferredAppMode       (translator | subtitles)
+///   - preferredVadSettings   (threshold, silenceDuration)
 /// Until then, preferences are device-local via SharedPreferences.
 /// ─────────────────────────────────────────────────────────────────────────────
 class PreferencesService {
-  static const _keyApiKey = 'grok_api_key';
   static const _keyLanguageConfig = 'language_config';
   static const _keyVadSettings = 'vad_settings';
   static const _keySubtitlesEnabled = 'subtitles_enabled';
@@ -30,10 +31,6 @@ class PreferencesService {
     final prefs = await SharedPreferences.getInstance();
     return PreferencesService(prefs);
   }
-
-  // API Key
-  String? getApiKey() => _prefs.getString(_keyApiKey);
-  Future<void> setApiKey(String key) => _prefs.setString(_keyApiKey, key);
 
   // Language config
   LanguageConfig getLanguageConfig() {

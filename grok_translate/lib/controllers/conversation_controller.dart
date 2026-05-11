@@ -1,11 +1,8 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logger/logger.dart';
 import 'package:uuid/uuid.dart';
-
-import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../models/conversation_models.dart';
 // kSupportedLanguages used for ISO code → display name lookup
@@ -181,23 +178,14 @@ class ConversationController extends StateNotifier<ConversationState> {
 
   /// Start a translation session.
   ///
-  /// On web the Cloudflare Worker proxy holds the API key, so no key is needed
-  /// from the user. On native (iOS/Android) a key must be stored in Settings.
-  Future<void> startSession({String? apiKey}) async {
-    // Clean up any previous session (translator or subtitles) before starting
-    // a new one — prevents stale realtime-API events or STT connections from
-    // leaking into the new session.
+  /// The API key is held exclusively on the Cloudflare Worker proxy —
+  /// no key is required or stored on device.
+  Future<void> startSession() async {
+    // Clean up any previous session before starting a new one — prevents
+    // stale realtime-API events or STT connections from leaking in.
     if (state.isSessionActive) {
       await endSession();
     }
-
-    final key = apiKey ?? _prefs.getApiKey();
-    if (!kIsWeb && (key == null || key.isEmpty)) {
-      _setError('API key not configured. Please enter it in Settings.');
-      return;
-    }
-
-    _translate.setApiKey(key);
 
     state = state.copyWith(
       isSessionActive: true,
@@ -207,14 +195,14 @@ class ConversationController extends StateNotifier<ConversationState> {
     _setStatus(ConversationStatus.listening);
 
     if (state.appMode == AppMode.subtitles) {
-      await _startSubtitlesSession(key);
+      await _startSubtitlesSession();
     } else {
-      await _startTranslatorSession(key);
+      await _startTranslatorSession();
     }
   }
 
   /// Subtitles mode: STT streaming for live captions + REST API for translation.
-  Future<void> _startSubtitlesSession(String? apiKey) async {
+  Future<void> _startSubtitlesSession() async {
     // Start mic first so audio is ready when STT connects.
     final micStarted = await _audio.startRecording();
     if (!micStarted) {
@@ -223,7 +211,7 @@ class ConversationController extends StateNotifier<ConversationState> {
     }
 
     // Connect STT WebSocket (auto-reconnects after each utterance).
-    await _stt.connect(apiKey: apiKey);
+    await _stt.connect();
 
     // Forward raw PCM bytes to STT. rawMicBytes is set for both web and
     // native — if somehow null (shouldn't happen) log a warning.
@@ -286,7 +274,7 @@ class ConversationController extends StateNotifier<ConversationState> {
   }
 
   /// Translator mode: Realtime API with manual injection.
-  Future<void> _startTranslatorSession(String? apiKey) async {
+  Future<void> _startTranslatorSession() async {
     final langCfg = state.languageConfig ?? const LanguageConfig();
     final vadSettings = VadSettings(
       threshold: state.vadThreshold,
@@ -294,7 +282,6 @@ class ConversationController extends StateNotifier<ConversationState> {
     );
 
     await _api.connect(
-      apiKey: apiKey,
       languageConfig: langCfg,
       vadSettings: vadSettings,
       appMode: state.appMode,

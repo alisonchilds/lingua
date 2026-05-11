@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:logger/logger.dart';
 
 import 'ws_channel_stub.dart'
@@ -36,11 +35,10 @@ class SttTranscriptEvent {
 /// transcript.partial events approximately every 500 ms, making it possible
 /// to show live captions while the speaker is still talking.
 ///
-/// Web builds connect through the Cloudflare proxy at [kSttProxyUrl].
-/// Native builds connect directly using the API key header.
+/// All platforms connect through the Cloudflare proxy at [kSttProxyUrl].
+/// The API key is held server-side — no key is needed on device.
 class SttService {
   static const kSttProxyUrl = 'wss://grok-voice-proxy.alison-ade.workers.dev/stt';
-  static const kSttDirectBase = 'wss://api.x.ai/v1/stt';
 
   final Logger _log = Logger(printer: PrettyPrinter(methodCount: 0));
 
@@ -58,7 +56,6 @@ class SttService {
   // ("each connection handles a single utterance"). Auto-reconnect keeps
   // the session alive indefinitely for continuous live captioning.
   bool _autoReconnect = false;
-  String? _apiKey;
   String? _queryString; // cached so reconnect uses same params
   // True once a final transcript event has been emitted for the current
   // utterance — prevents a duplicate when both transcript.partial {is_final}
@@ -71,8 +68,7 @@ class SttService {
 
   // ── Connection ────────────────────────────────────────────────────────────
 
-  Future<void> connect({String? apiKey}) async {
-    _apiKey = apiKey;
+  Future<void> connect() async {
     _autoReconnect = true;
     _disposed = false;
 
@@ -89,9 +85,7 @@ class SttService {
   Future<void> _openConnection() async {
     await _close(permanent: false); // close existing but keep auto-reconnect
 
-    final uri = kIsWeb
-        ? Uri.parse('$kSttProxyUrl?$_queryString')
-        : Uri.parse('$kSttDirectBase?$_queryString');
+    final uri = Uri.parse('$kSttProxyUrl?$_queryString');
 
     _log.i('STT connecting → $uri');
 

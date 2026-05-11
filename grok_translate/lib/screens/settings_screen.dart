@@ -2,42 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../controllers/conversation_controller.dart';
-import '../widgets/api_key_dialog.dart';
 
-class SettingsScreen extends ConsumerStatefulWidget {
+class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
   @override
-  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
-}
-
-class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  bool _hasApiKey = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _checkApiKey();
-  }
-
-  void _checkApiKey() {
-    final prefs = ref.read(preferencesServiceProvider);
-    final key = prefs.getApiKey();
-    setState(() => _hasApiKey = key != null && key.isNotEmpty);
-  }
-
-  Future<void> _editApiKey() async {
-    final prefs = ref.read(preferencesServiceProvider);
-    final existing = prefs.getApiKey();
-    final key = await ApiKeyDialog.show(context, currentKey: existing);
-    if (key != null) {
-      await prefs.setApiKey(key);
-      if (mounted) setState(() => _hasApiKey = true);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(conversationControllerProvider);
     final controller = ref.read(conversationControllerProvider.notifier);
     final theme = Theme.of(context);
@@ -47,23 +17,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // API key section
-          const _SectionHeader('API Key'),
-          Card(
-            child: ListTile(
-              leading: Icon(
-                _hasApiKey ? Icons.vpn_key : Icons.vpn_key_outlined,
-                color: _hasApiKey ? Colors.green : theme.colorScheme.error,
-              ),
-              title:
-                  Text(_hasApiKey ? 'API key configured' : 'No API key set'),
-              subtitle: const Text('xAI platform.x.ai'),
-              trailing: const Icon(Icons.arrow_forward_ios, size: 14),
-              onTap: _editApiKey,
-            ),
-          ),
-          const SizedBox(height: 16),
-
           // Subtitles
           const _SectionHeader('Display'),
           Card(
@@ -106,7 +59,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Lower = more sensitive to quiet speech. Default: 0.60',
+                    'Lower = more sensitive to quiet speech. Default: 0.70',
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.outline),
                   ),
@@ -132,7 +85,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Time after speech stops before translation triggers. Default: 400 ms',
+                    'Time after speech stops before translation triggers. Default: 300 ms',
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.outline),
                   ),
@@ -152,8 +105,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 children: [
                   const _InfoRow('App', 'Grok Translate v1.0.0'),
                   const _InfoRow('API endpoint', 'wss://api.x.ai/v1/realtime'),
-                  const _InfoRow('Audio format', 'PCM16 · 24 kHz · Mono'),
+                  const _InfoRow('Audio format', 'PCM16 · 16 kHz · Mono'),
                   const _InfoRow('VAD mode', 'server_vad'),
+                  const _InfoRow('Auth', 'Server-side proxy (no key on device)'),
                   const SizedBox(height: 12),
                   Text(
                     'MVP limitations: echo cancellation is gating-based only. '

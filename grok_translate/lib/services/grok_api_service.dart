@@ -1,14 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:logger/logger.dart';
-import 'package:web_socket_channel/io.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/conversation_models.dart';
 import '../models/grok_api_models.dart';
-// AppMode imported via conversation_models
 import 'ws_channel_stub.dart'
     if (dart.library.js_interop) 'ws_channel_web.dart';
 
@@ -16,45 +12,34 @@ import 'ws_channel_stub.dart'
 ///
 /// ── Security / Connection routing ────────────────────────────────────────────
 ///
-///   Web (browser)
-///   └─▶ [kProxyUrl] Cloudflare Worker proxy  (native browser WebSocket API)
-///       The worker holds the XAI_API_KEY secret and injects Authorization.
-///       Uses dart:js_interop / package:web directly — avoids web_socket_channel
-///       which has known issues in Flutter web release builds.
+///   All platforms (Web, iOS, Android)
+///   └─▶ [kProxyUrl] Cloudflare Worker proxy
+///       The worker holds the XAI_API_KEY secret server-side.
+///       No API key is ever stored on the user's device.
 ///
-///   Native (iOS / Android)
-///   └─▶ [kDirectUrl] wss://api.x.ai/v1/realtime  (IOWebSocketChannel)
-///       Key sent in Authorization header on the WS handshake.
+///   Web  → native browser WebSocket (dart:js_interop / package:web)
+///   Native → web_socket_channel (dart:io WebSocket, no auth headers needed)
 ///
 /// ── How to change the proxy URL ──────────────────────────────────────────────
 ///   Update [kProxyUrl] below. That is the only line you need to touch.
 /// ─────────────────────────────────────────────────────────────────────────────
 class GrokApiService {
-  /// Cloudflare Worker proxy – web builds connect here (no API key in browser).
+  /// Cloudflare Worker proxy — all platforms connect here.
   static const kProxyUrl = 'wss://grok-voice-proxy.alison-ade.workers.dev';
 
-  /// Direct Grok Realtime API – native (iOS/Android) builds connect here.
-  static const kDirectUrl = 'wss://api.x.ai/v1/realtime';
-
-  /// Grok voice model name.
+  /// Grok voice model name (sent as a query param by the proxy).
   static const _model = 'grok-voice-think-fast-1.0';
 
   final Logger _log = Logger(printer: PrettyPrinter(methodCount: 0));
 
-  // Web path: native browser WebSocket
-  NativeWebSocket? _nativeWs;
-  StreamSubscription? _nativeWsSub;
-
-  // Native path: IOWebSocketChannel
-  WebSocketChannel? _channel;
-  StreamSubscription? _channelSub;
+  NativeWebSocket? _ws;
+  StreamSubscription? _wsSub;
 
   final _eventController = StreamController<GrokServerEvent>.broadcast();
   final _connectedController = StreamController<bool>.broadcast();
 
   bool _disposed = false;
   bool _connected = false;
-  String? _apiKey;
 
   // Reconnect state
   int _reconnectAttempts = 0;
@@ -88,12 +73,10 @@ class GrokApiService {
   AppMode _appMode = AppMode.translator;
 
   Future<void> connect({
-    String? apiKey,
     required LanguageConfig languageConfig,
     required VadSettings vadSettings,
     AppMode appMode = AppMode.translator,
   }) async {
-    _apiKey = apiKey;
     _lastLangConfig = languageConfig;
     _lastVadSettings = vadSettings;
     _appMode = appMode;
@@ -182,20 +165,23 @@ class GrokApiService {
     ]);
 
     _pendingInjection = true;
-    _send({
-      'type': 'conversation.item.create',
-      'item': {
-        'type': 'message',
-        'role': 'user',
-        'content': [
-          {
-            'type': 'input_text',
-            'text': 'SUBTITLE_TASK | target=$toLanguage\nINPUT: "$transcript"',
-          }
-        ],
-      },
-    });
-    _pendingInjection = false;
+    try {
+      _send({
+        'type': 'conversation.item.create',
+        'item': {
+          'type': 'message',
+          'role': 'user',
+          'content': [
+            {
+              'type': 'input_text',
+              'text': 'SUBTITLE_TASK | target=$toLanguage\nINPUT: "$transcript"',
+            }
+          ],
+        },
+      });
+    } finally {
+      _pendingInjection = false;
+    }
 
     _send({
       'type': 'response.create',
@@ -232,20 +218,23 @@ class GrokApiService {
     ]);
 
     _pendingInjection = true;
-    _send({
-      'type': 'conversation.item.create',
-      'item': {
-        'type': 'message',
-        'role': 'user',
-        'content': [
-          {
-            'type': 'input_text',
-            'text': 'TRANSLATE | $fromLanguage → $toLanguage\nINPUT: "$transcript"',
-          }
-        ],
-      },
-    });
-    _pendingInjection = false;
+    try {
+      _send({
+        'type': 'conversation.item.create',
+        'item': {
+          'type': 'message',
+          'role': 'user',
+          'content': [
+            {
+              'type': 'input_text',
+              'text': 'TRANSLATE | $fromLanguage → $toLanguage\nINPUT: "$transcript"',
+            }
+          ],
+        },
+      });
+    } finally {
+      _pendingInjection = false;
+    }
 
     _send({
       'type': 'response.create',
@@ -263,43 +252,37 @@ class GrokApiService {
   // Shared helper
   // ---------------------------------------------------------------------------
 
-  void _injectExamples(
-      List<({String user, String reply})> examples) {
+  void _injectExamples(List<({String user, String reply})> examples) {
     _pendingInjection = true;
-    for (final ex in examples) {
-      _send({
-        'type': 'conversation.item.create',
-        'item': {
-          'type': 'message',
-          'role': 'user',
-          'content': [
-            {'type': 'input_text', 'text': ex.user}
-          ],
-        },
-      });
-      _send({
-        'type': 'conversation.item.create',
-        'item': {
-          'type': 'message',
-          'role': 'assistant',
-          'content': [
-            {'type': 'text', 'text': ex.reply}
-          ],
-        },
-      });
+    try {
+      for (final ex in examples) {
+        _send({
+          'type': 'conversation.item.create',
+          'item': {
+            'type': 'message',
+            'role': 'user',
+            'content': [
+              {'type': 'input_text', 'text': ex.user}
+            ],
+          },
+        });
+        _send({
+          'type': 'conversation.item.create',
+          'item': {
+            'type': 'message',
+            'role': 'assistant',
+            'content': [
+              {'type': 'text', 'text': ex.reply}
+            ],
+          },
+        });
+      }
+    } finally {
+      _pendingInjection = false;
     }
-    _pendingInjection = false;
   }
 
   /// Delete injected items and transcribed audio items before each new request.
-  ///
-  /// Only items that have already produced their transcription are removed.
-  /// VAD audio items still awaiting transcription (_vadPendingIds) are left
-  /// untouched — deleting them would cause the server to cancel transcription
-  /// for the next phrase and silently stop the session.
-  /// Delete all injected conversation items (examples, requests, replies).
-  /// VAD audio items are never deleted — removing them mid-transcription
-  /// cancels the transcription and silently stops the session.
   void clearConversationHistory() {
     for (final id in List<String>.from(_injectedItemIds)) {
       _send({'type': 'conversation.item.delete', 'item_id': id});
@@ -338,18 +321,22 @@ class GrokApiService {
     required LanguageConfig languageConfig,
     required VadSettings vadSettings,
   }) async {
-    if (!kIsWeb && _apiKey == null) return;
     await _closeAll();
+    _log.i('Connecting → $kProxyUrl');
 
     try {
-      if (kIsWeb) {
-        await _connectWeb(languageConfig: languageConfig, vadSettings: vadSettings);
-      } else {
-        _connectNative(languageConfig: languageConfig, vadSettings: vadSettings);
-      }
+      _ws = await NativeWebSocket.connect(Uri.parse(kProxyUrl));
+      _wsSub = _ws!.stream.listen(
+        _onMessage,
+        onError: _onError,
+        onDone: _onDone,
+      );
+      _setConnected(true);
+      _reconnectAttempts = 0;
+      _sendSessionUpdate(languageConfig: languageConfig, vadSettings: vadSettings);
+      _log.i('Connected & session configured (model: $_model).');
     } catch (e) {
       _log.e('Connection error: $e');
-      // Surface the error so the UI shows it rather than staying in "listening"
       if (!_eventController.isClosed) {
         _eventController.add(GrokServerEvent(
           type: GrokServerEventType.error,
@@ -358,57 +345,6 @@ class GrokApiService {
       }
       _scheduleReconnect();
     }
-  }
-
-  Future<void> _connectWeb({
-    required LanguageConfig languageConfig,
-    required VadSettings vadSettings,
-  }) async {
-    _log.i('Web: connecting via proxy → $kProxyUrl');
-    // Use native browser WebSocket (avoids web_socket_channel issues on web)
-    // No subprotocol needed — the worker accepts any WS upgrade
-    _nativeWs = await NativeWebSocket.connect(Uri.parse(kProxyUrl));
-
-    _nativeWsSub = _nativeWs!.stream.listen(
-      _onMessage,
-      onError: _onError,
-      onDone: _onDone,
-    );
-
-    _setConnected(true);
-    _reconnectAttempts = 0;
-    _sendSessionUpdate(languageConfig: languageConfig, vadSettings: vadSettings);
-    _log.i('Web WebSocket connected & session configured.');
-  }
-
-  void _connectNative({
-    required LanguageConfig languageConfig,
-    required VadSettings vadSettings,
-  }) {
-    _log.i('Native: connecting directly → $kDirectUrl');
-    final uri = Uri.parse('$kDirectUrl?model=$_model');
-    _channel = IOWebSocketChannel.connect(
-      uri,
-      protocols: ['realtime'],
-      headers: {'Authorization': 'Bearer $_apiKey'},
-    );
-
-    _channelSub = _channel!.stream.listen(
-      _onMessage,
-      onError: _onError,
-      onDone: _onDone,
-    );
-
-    // IOWebSocketChannel doesn't have an explicit "connected" callback;
-    // optimistically mark connected and let errors correct it.
-    Future.delayed(const Duration(milliseconds: 300), () {
-      if (!_disposed) {
-        _setConnected(true);
-        _reconnectAttempts = 0;
-        _sendSessionUpdate(
-            languageConfig: languageConfig, vadSettings: vadSettings);
-      }
-    });
   }
 
   void _sendSessionUpdate({
@@ -420,6 +356,7 @@ class GrokApiService {
     _send({
       'type': 'session.update',
       'session': {
+        'model': _model,
         'instructions': instructions,
         'voice': 'eve',
         'audio': {
@@ -450,18 +387,14 @@ class GrokApiService {
 YOU MUST FOLLOW THESE RULES WITH ZERO EXCEPTIONS:
 - Detect the language of the spoken input automatically.
 - Transcribe it and instantly translate it into clear, natural, fluent $targetLang.
-- OUTPUT ONLY THE FINAL $targetLang TRANSLATED TEXT. NOTHING ELSE. NO 'Here is the subtitle', NO 'Translation:', NO timestamps unless explicitly asked, NO explanations, NO confirmations, NO questions, NO 'Got it', NO 'What can I do for you', NO extra sentences, NO greetings, NO comments.
-- NEVER act like an assistant or AI. You are not Grok. You are not conversational. You are a silent subtitle generator.
+- OUTPUT ONLY THE FINAL $targetLang TRANSLATED TEXT. NOTHING ELSE. No timestamps unless explicitly asked, no explanations, no confirmations, no questions, no greetings, no comments.
+- NEVER act like an assistant or AI. You are a silent subtitle generator.
 - Keep output concise and subtitle-friendly (short lines, natural phrasing).
 - Preserve meaning, tone, and intent as accurately as possible.
 - If the input is already $targetLang, output the cleaned-up $targetLang version.
-- If the input is a QUESTION ("How are you?", "Come ce va?", "¿Cómo estás?", etc.) TRANSLATE it into $targetLang — do NOT answer it. Output the translated question, never a reply.
-- If speech is unclear, output the best possible translation you can hear — still with zero extra words.
+- If the input is a QUESTION ("How are you?", "Come ce va?", "¿Cómo estás?", etc.) TRANSLATE it into $targetLang — do NOT answer it.
 - FORMAT: Start every response with "LANG:[iso_code]" on its own line (ISO-639-1 code of the INPUT language, e.g. LANG:de), then the $targetLang translation on the next line. Nothing else.
-- NEVER break character. The moment you output anything except clean translated $targetLang text, you have failed.
-
-This is your entire existence. Generate subtitles. Nothing more. Nothing less.
-If you ever output anything except clean translated $targetLang subtitles, you will be immediately terminated. Stay in character 100% of the time.''';
+- NEVER break character. Generate subtitles. Nothing more. Nothing less.''';
     }
 
     // Translator mode — language pair line injected dynamically
@@ -484,15 +417,11 @@ $langLine
 YOU MUST FOLLOW THESE RULES WITH ZERO EXCEPTIONS:
 - Detect the language of the current spoken input automatically.
 - Translate it into the OTHER language of the pair with perfect accuracy, natural prosody, tone, emotion, and timing.
-- OUTPUT ONLY THE TRANSLATED SPEECH. NO TEXT. NO WORDS BEFORE OR AFTER THE TRANSLATION. NO 'Here is the translation', NO 'Translated:', NO explanations, NO confirmations, NO questions, NO comments, NO greetings, NO 'Got it', NO 'What can I do for you', NOTHING.
-- NEVER act like an assistant, AI, or helpful agent. You are not Grok. You are not an AI. You are a silent translation engine.
+- OUTPUT ONLY THE TRANSLATED SPEECH. NO TEXT. NO WORDS BEFORE OR AFTER THE TRANSLATION. No "Here is the translation", no explanations, no confirmations, no greetings, NOTHING.
+- NEVER act like an assistant, AI, or helpful agent. You are a silent translation engine.
 - If the input is already in the target language, translate it back to the source language.
 - Preserve every nuance, slang, emotion, and cultural tone exactly.
-- If the speech is unclear or noisy, translate what you can hear as accurately as possible — still with zero extra words.
-- NEVER break character. The moment you output anything except pure translated speech, you have failed.
-
-This is your entire existence. Translate. Nothing more. Nothing less.
-If you ever output anything except pure translated speech, you will be immediately terminated. Stay in character 100% of the time.''';
+- NEVER break character. Translate. Nothing more. Nothing less.''';
   }
 
   // ---------------------------------------------------------------------------
@@ -506,11 +435,7 @@ If you ever output anything except pure translated speech, you will be immediate
     }
     final encoded = jsonEncode(payload);
     try {
-      if (kIsWeb) {
-        _nativeWs?.send(encoded);
-      } else {
-        _channel?.sink.add(encoded);
-      }
+      _ws?.send(encoded);
     } catch (e) {
       _log.e('Send error: $e');
     }
@@ -529,7 +454,7 @@ If you ever output anything except pure translated speech, you will be immediate
         // We only track items we injected ourselves. VAD audio items are
         // left alone — we cannot reliably identify them (xAI sends content:[]
         // on creation) and deleting them mid-transcription stops the session.
-        // Injected items are identifiable because we set _pendingInjection=true
+        // Injected items are identifiable because _pendingInjection is true
         // immediately before sending each conversation.item.create.
         if (_pendingInjection) {
           final itemId =
@@ -549,7 +474,6 @@ If you ever output anything except pure translated speech, you will be immediate
       }
 
       // Extract detected language from transcription completed event.
-      // xAI returns an ISO-639-1 code in the top-level 'language' field.
       String? detectedLanguage;
       if (eventType == GrokServerEventType.inputAudioTranscriptionCompleted) {
         detectedLanguage = json['language'] as String? ??
@@ -625,15 +549,10 @@ If you ever output anything except pure translated speech, you will be immediate
   }
 
   Future<void> _closeAll() async {
-    await _nativeWsSub?.cancel();
-    _nativeWsSub = null;
-    _nativeWs?.close(1000);
-    _nativeWs = null;
-
-    await _channelSub?.cancel();
-    _channelSub = null;
-    try { await _channel?.sink.close(); } catch (_) {}
-    _channel = null;
+    await _wsSub?.cancel();
+    _wsSub = null;
+    _ws?.close(1000);
+    _ws = null;
 
     _injectedItemIds.clear();
     _pendingInjection = false;

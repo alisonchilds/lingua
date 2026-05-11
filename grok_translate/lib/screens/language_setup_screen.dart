@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,7 +6,6 @@ import 'package:go_router/go_router.dart';
 import '../controllers/conversation_controller.dart';
 import '../models/conversation_models.dart';
 import '../router/app_router.dart';
-import '../widgets/api_key_dialog.dart';
 import '../widgets/language_selector.dart';
 
 class LanguageSetupScreen extends ConsumerStatefulWidget {
@@ -21,9 +19,6 @@ class LanguageSetupScreen extends ConsumerStatefulWidget {
 class _LanguageSetupScreenState extends ConsumerState<LanguageSetupScreen> {
   late LanguageConfig _config;
   late AppMode _mode;
-  bool _hasApiKey = false;
-
-  bool get _keyRequired => !kIsWeb;
 
   @override
   void initState() {
@@ -31,28 +26,9 @@ class _LanguageSetupScreenState extends ConsumerState<LanguageSetupScreen> {
     final s = ref.read(conversationControllerProvider);
     _config = s.languageConfig ?? const LanguageConfig();
     _mode = s.appMode;
-    if (_keyRequired) _checkApiKey();
-  }
-
-  Future<void> _checkApiKey() async {
-    final key = ref.read(preferencesServiceProvider).getApiKey();
-    if (mounted) setState(() => _hasApiKey = key != null && key.isNotEmpty);
-  }
-
-  Future<void> _promptApiKey() async {
-    final prefs = ref.read(preferencesServiceProvider);
-    final key = await ApiKeyDialog.show(context, currentKey: prefs.getApiKey());
-    if (key != null) {
-      await prefs.setApiKey(key);
-      if (mounted) setState(() => _hasApiKey = true);
-    }
   }
 
   Future<void> _start() async {
-    if (_keyRequired && !_hasApiKey) {
-      await _promptApiKey();
-      if (!_hasApiKey) return;
-    }
     final ctrl = ref.read(conversationControllerProvider.notifier);
     await ctrl.setLanguageConfig(_config);
     ctrl.setAppMode(_mode);
@@ -91,8 +67,7 @@ class _LanguageSetupScreenState extends ConsumerState<LanguageSetupScreen> {
       ),
       body: Center(
         child: SingleChildScrollView(
-          padding:
-              EdgeInsets.symmetric(horizontal: pad, vertical: 32),
+          padding: EdgeInsets.symmetric(horizontal: pad, vertical: 32),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -108,14 +83,6 @@ class _LanguageSetupScreenState extends ConsumerState<LanguageSetupScreen> {
                 onChanged: (m) => setState(() => _mode = m),
               ).animate().fadeIn(duration: 400.ms, delay: 80.ms),
               const SizedBox(height: 24),
-
-              // ── API key badge (native only) ────────────────────────────
-              if (_keyRequired) ...[
-                _ApiKeyBadge(hasKey: _hasApiKey, onTap: _promptApiKey)
-                    .animate()
-                    .fadeIn(duration: 400.ms, delay: 120.ms),
-                const SizedBox(height: 24),
-              ],
 
               // ── Auto-detect toggle ─────────────────────────────────────
               Card(
@@ -354,57 +321,6 @@ class _HeroSection extends StatelessWidget {
                 ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             textAlign: TextAlign.center),
       ],
-    );
-  }
-}
-
-class _ApiKeyBadge extends StatelessWidget {
-  const _ApiKeyBadge({required this.hasKey, required this.onTap});
-  final bool hasKey;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final color = hasKey ? Colors.green : theme.colorScheme.error;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withValues(alpha: 0.4)),
-        ),
-        child: Row(
-          children: [
-            Icon(hasKey ? Icons.vpn_key : Icons.vpn_key_outlined,
-                color: color, size: 20),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(hasKey ? 'API key configured' : 'API key required',
-                      style: TextStyle(
-                          color: color,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14)),
-                  Text(
-                    hasKey
-                        ? 'Tap to change your xAI API key'
-                        : 'Tap to enter your xAI API key',
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.outline),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.arrow_forward_ios, size: 14, color: color),
-          ],
-        ),
-      ),
     );
   }
 }

@@ -1,31 +1,23 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:logger/logger.dart';
 
-import '../services/grok_api_service.dart' show GrokApiService;
-
 /// Translates a transcript to the target language using the Grok chat
-/// completions REST API.
+/// completions REST API via the Cloudflare proxy.
 ///
-/// On web the request goes through the Cloudflare proxy at /translate.
-/// On native it goes directly to api.x.ai with the stored API key.
+/// All platforms (web and native) send requests to the proxy, which
+/// injects the XAI_API_KEY server-side. No API key is stored on device.
 class ChatTranslationService {
-  static const _proxyUrl = '${_workerBase}/translate';
-  static const _workerBase = 'https://grok-voice-proxy.alison-ade.workers.dev';
-  static const _directUrl = 'https://api.x.ai/v1/chat/completions';
+  static const _proxyUrl = 'https://grok-voice-proxy.alison-ade.workers.dev/translate';
   static const _model = 'grok-4.3';
 
   final Logger _log = Logger(printer: PrettyPrinter(methodCount: 0));
-  String? _apiKey;
-
-  void setApiKey(String? key) => _apiKey = key;
 
   /// Translate [text] into [targetLanguage]. Returns the translated string,
   /// or null if the request fails.
   Future<String?> translate(String text, String targetLanguage) async {
-    final url = Uri.parse(kIsWeb ? _proxyUrl : _directUrl);
+    final url = Uri.parse(_proxyUrl);
 
     final body = jsonEncode({
       'model': _model,
@@ -55,13 +47,9 @@ class ChatTranslationService {
       'max_tokens': 256,
     });
 
-    final headers = {
-      'Content-Type': 'application/json',
-      if (!kIsWeb && _apiKey != null) 'Authorization': 'Bearer $_apiKey',
-    };
-
     try {
-      final response = await http.post(url, headers: headers, body: body)
+      final response = await http
+          .post(url, headers: {'Content-Type': 'application/json'}, body: body)
           .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
