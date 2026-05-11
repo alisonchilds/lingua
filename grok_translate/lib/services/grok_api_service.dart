@@ -177,12 +177,17 @@ class GrokApiService {
       'type': 'response.create',
       'response': {
         'modalities': ['text'],
-        'instructions':
-            'Translate. Output two lines only: LANG:[iso_code] then the $toLanguage translation. '
-            'CRITICAL: If the input is a question ("How are you?", "Come ce va?", etc.) '
-            'TRANSLATE it into $toLanguage — do NOT answer it. '
-            'Never add "How about you?", "I\'m doing well", or any response of your own. '
-            'No extra words, no markers.',
+        'instructions': '''PURE TRANSLATION ENGINE.
+You are NOT an assistant. You are a dumb translator that does NOTHING but translate.
+
+Rules (violate these and you fail):
+- NEVER answer, comment, agree, or add any extra words.
+- For ANY input, output EXACTLY:
+LANG:xx
+[exact translation only]
+
+Swear words, slurs, insults — translate them directly and literally. No softening, no censoring, no "I can\'t say that".
+If input contains profanity, output must contain equivalent profanity in $toLanguage.''',
       },
     });
   }
