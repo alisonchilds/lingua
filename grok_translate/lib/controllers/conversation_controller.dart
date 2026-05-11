@@ -100,6 +100,7 @@ class ConversationController extends StateNotifier<ConversationState> {
   StreamSubscription? _micSub;
   StreamSubscription? _sttSub;       // STT transcript stream (subtitles mode)
   StreamSubscription? _sttMicSub;    // raw bytes → STT (subtitles mode)
+  StreamSubscription? _sttConnSub;   // STT connection status (subtitles mode)
   StreamSubscription? _connectionSub;
   StreamSubscription? _playerSub;
 
@@ -126,11 +127,16 @@ class ConversationController extends StateNotifier<ConversationState> {
   Timer? _transcriptDebounce;
   final StringBuffer _transcriptAccumulator = StringBuffer();
 
-  // Subtitles mode debounce: fires one translation after all final/speechFinal
-  // events for an utterance have settled (avoids duplicate translations when
-  // the STT sends the two flags in separate events or via transcript.done).
+  // ── Subtitles mode ─────────────────────────────────────────────────────────
+  // True while an async translate() HTTP call is in-flight. Prevents a second
+  // concurrent translate from being triggered by duplicate final events that
+  // arrive while the first call is awaiting a response.
+  bool _sttTranslating = false;
+  // Last text that was sent to translate. Provides a fast exact-text guard
+  // so that identical final/speechFinal events from the same utterance (a
+  // common xAI STT pattern) never schedule a second translate call.
+  String? _lastSttText;
   Timer? _sttDebounce;
-  String? _sttBestTranscript; // most accurate transcript seen so far
 
   void _init() {
     final langCfg = _prefs.getLanguageConfig();
@@ -146,15 +152,11 @@ class ConversationController extends StateNotifier<ConversationState> {
 
     // Listen to WebSocket events
     _apiEventSub = _api.events.listen(_handleApiEvent);
-    // Realtime API connection (translator mode)
+    // Realtime API connection status (translator mode).
+    // Subtitles mode connection status is handled by _sttConnSub which is
+    // set up (and re-set on reconnect) inside _startSubtitlesSession().
     _connectionSub = _api.connectionStatus.listen((connected) {
       if (state.appMode != AppMode.subtitles) {
-        state = state.copyWith(isConnected: connected);
-      }
-    });
-    // STT connection (subtitles mode)
-    _stt.connectionStatus.listen((connected) {
-      if (state.appMode == AppMode.subtitles) {
         state = state.copyWith(isConnected: connected);
       }
     });
@@ -208,69 +210,91 @@ class ConversationController extends StateNotifier<ConversationState> {
 
   /// Subtitles mode: STT streaming for live captions + REST API for translation.
   Future<void> _startSubtitlesSession() async {
-    // Start mic first so audio is ready when STT connects.
     final micStarted = await _audio.startRecording();
     if (!micStarted) {
       _setError('Microphone permission denied or unavailable.');
       return;
     }
 
-    // Connect STT WebSocket (auto-reconnects after each utterance).
     await _stt.connect();
 
-    // Forward raw PCM bytes to STT. rawMicBytes is set for both web and
-    // native — if somehow null (shouldn't happen) log a warning.
     final rawStream = _audio.rawMicBytes;
     if (rawStream == null) {
       _log.e('rawMicBytes stream unavailable — subtitles mode cannot function.');
       _setError('Microphone audio stream unavailable.');
       return;
     }
-    _sttMicSub = rawStream.listen((bytes) {
-      _stt.sendAudio(bytes);
+
+    // Subscribes (or re-subscribes) the raw PCM forwarder to the STT service.
+    // Called once at session start and again on every STT reconnect so that
+    // mic bytes always flow to the latest WebSocket instance.
+    void wireMic() {
+      _sttMicSub?.cancel();
+      _sttMicSub = rawStream.listen((bytes) => _stt.sendAudio(bytes));
+    }
+    wireMic();
+
+    // Re-wire mic on every STT reconnect (the xAI STT API closes the socket
+    // after each utterance; SttService opens a new one automatically).
+    _sttConnSub?.cancel();
+    _sttConnSub = _stt.connectionStatus.listen((connected) {
+      state = state.copyWith(isConnected: connected);
+      if (connected && state.isSessionActive) wireMic();
     });
 
     final targetLang = (state.languageConfig?.autoDetect == false)
-        ? (state.languageConfig!.lang2Name)
+        ? state.languageConfig!.lang2Name
         : 'English';
 
     _sttSub = _stt.transcripts.listen((event) {
       if (event.text.isEmpty) return;
 
-      if (!event.speechFinal && !event.isFinal) {
-        // Ongoing partial — cancel any pending translation, show live caption.
-        _sttDebounce?.cancel();
-        _sttBestTranscript = null;
+      // Show live caption for in-progress speech; don't trigger translation yet.
+      if (!event.isFinal && !event.speechFinal) {
         state = state.copyWith(partialTranscript: event.text);
         _setStatus(ConversationStatus.translating);
         return;
       }
 
-      // Keep the most accurate transcript seen so far (prefer isFinal text).
-      if (event.isFinal || _sttBestTranscript == null) {
-        _sttBestTranscript = event.text;
-      }
+      final clean = event.text.trim();
+      if (clean.isEmpty) return;
 
-      // Pick up language detection when the STT API provides it.
-      if (event.language != null) {
-        _updateDetectedLanguage(event.language!);
-      }
+      // ── Deduplication guards ────────────────────────────────────────────
+      // Guard 1: exact-text match — the xAI STT API routinely fires both
+      //   transcript.partial {is_final: true} AND transcript.done for the
+      //   same text. Without this check the same phrase translates twice.
+      if (clean == _lastSttText) return;
 
-      // Debounce: collect all final/speechFinal events for this utterance
-      // then fire exactly one translation call.
+      // Guard 2: in-flight lock — an async translate() call is already
+      //   running for this utterance. The async timer callback cleared the
+      //   lock only after the HTTP call returned, so any duplicate final
+      //   event that arrives during the await is silently dropped.
+      if (_sttTranslating) return;
+
+      if (event.language != null) _updateDetectedLanguage(event.language!);
+
+      // Debounce to absorb any further final events for this utterance
+      // before committing to the HTTP translation call.
+      _lastSttText = clean;
       _sttDebounce?.cancel();
-      _sttDebounce = Timer(const Duration(milliseconds: 400), () async {
-        final transcript = (_sttBestTranscript ?? '').trim();
-        _sttBestTranscript = null;
-        if (transcript.isEmpty) return;
+      _sttDebounce = Timer(const Duration(milliseconds: 500), () async {
+        if (!state.isSessionActive) return;
 
+        _sttTranslating = true;
         state = state.copyWith(partialTranscript: '');
-        _setStatus(ConversationStatus.listening);
-
-        _log.i('[STT] "$transcript" → $targetLang');
-        final translation = await _translate.translate(transcript, targetLang);
-        if (translation != null && translation.isNotEmpty) {
-          _addSubtitleMessage(translation, targetLang);
+        _setStatus(ConversationStatus.translating);
+        try {
+          _log.i('[STT] "$clean" → $targetLang');
+          final translation = await _translate.translate(clean, targetLang);
+          if (translation != null && translation.isNotEmpty) {
+            _addSubtitleMessage(translation, targetLang);
+          }
+        } finally {
+          // Always release the lock and clear the text guard so the next
+          // utterance can proceed — even if translate() threw or returned null.
+          _sttTranslating = false;
+          _lastSttText = null;
+          if (state.isSessionActive) _setStatus(ConversationStatus.listening);
         }
       });
     });
@@ -316,11 +340,14 @@ class ConversationController extends StateNotifier<ConversationState> {
   Future<void> endSession() async {
     _pendingSessionReady = false;
     _sttDebounce?.cancel();
-    _sttBestTranscript = null;
+    _sttTranslating = false;
+    _lastSttText = null;
     // Translator mode subscriptions
     await _micSub?.cancel();
     _micSub = null;
     // Subtitles mode subscriptions
+    await _sttConnSub?.cancel();
+    _sttConnSub = null;
     await _sttSub?.cancel();
     _sttSub = null;
     await _sttMicSub?.cancel();
@@ -789,6 +816,7 @@ class ConversationController extends StateNotifier<ConversationState> {
     _micSub?.cancel();
     _sttSub?.cancel();
     _sttMicSub?.cancel();
+    _sttConnSub?.cancel();
     _connectionSub?.cancel();
     _playerSub?.cancel();
     super.dispose();
