@@ -331,38 +331,36 @@ class ConversationController extends StateNotifier<ConversationState> {
                 '')
             .trim();
 
-        // Accumulate and debounce — same logic for both Translator and Subtitles.
         if (rawText.isEmpty || _translationInFlight) break;
 
-        final accumulated = _transcriptAccumulator.toString().trim();
-
-        // ── Deduplication ─────────────────────────────────────────────────
-        // Whisper fires partial + final + confirmation events for the same
-        // segment. Three cases to handle before deciding how to update:
-        //
-        //   (1) Exact duplicate          → skip entirely
-        //   (2) New text is a subset     → skip (accumulated is more complete)
-        //   (3) New text is a superset   → REPLACE, then reset debounce
-        //   (4) Genuinely different text → append normally
-        //
-        // Note: the OLD check used rawText.contains(accumulated) to skip
-        // supersets — that was wrong. "Yeah yeah.".contains("Yeah") → true
-        // caused the more complete final text to be silently dropped,
-        // sending a truncated transcript to the model.
-        if (accumulated == rawText) break;                              // (1)
-        if (accumulated.isNotEmpty && accumulated.endsWith(rawText)) break; // (2)
-        if (accumulated.isNotEmpty && rawText.startsWith(accumulated)) {
-          // (3) Superset: replace so we don't produce "Yeah Yeah yeah."
+        if (state.appMode == AppMode.subtitles) {
+          // Subtitles: each VAD commit is one complete phrase. Always use the
+          // most recent (most accurate) transcription — never accumulate.
+          // Accumulating multiple events produces "Yeah Yeah" doubling when
+          // Whisper fires partial + final for the same segment.
           _transcriptAccumulator.clear();
+          _transcriptAccumulator.write(rawText);
+        } else {
+          // Translator: accumulate across multi-commit phrases with dedup.
+          // Three cases:
+          //   (1) exact dup          → skip
+          //   (2) new is subset      → skip (accumulated is more complete)
+          //   (3) new is superset    → replace (so we don't get "Yeah Yeah yeah.")
+          //   (4) genuinely new text → append
+          final accumulated = _transcriptAccumulator.toString().trim();
+          if (accumulated == rawText) break;                                // (1)
+          if (accumulated.isNotEmpty && accumulated.endsWith(rawText)) break; // (2)
+          if (accumulated.isNotEmpty && rawText.startsWith(accumulated)) {
+            _transcriptAccumulator.clear(); // (3) replace
+          }
+          _transcriptAccumulator // (4)
+            ..write(_transcriptAccumulator.isNotEmpty ? ' ' : '')
+            ..write(rawText);
         }
-        // (4) Append (accumulator may be empty after (3) clear or on first event)
-        _transcriptAccumulator
-          ..write(_transcriptAccumulator.isNotEmpty ? ' ' : '')
-          ..write(rawText);
 
         _transcriptDebounce?.cancel();
-        // Subtitles phrases are short → 600 ms absorbs duplicates without lag.
-        // Translator allows 1 200 ms so multi-chunk phrases can accumulate.
+        // Subtitles phrases are short → 600 ms is enough.
+        // Translator allows 1 200 ms so multi-commit phrases can accumulate.
         _transcriptDebounce = Timer(
           Duration(
               milliseconds:
@@ -370,8 +368,6 @@ class ConversationController extends StateNotifier<ConversationState> {
           () {
             final full = _transcriptAccumulator.toString().trim();
             _transcriptAccumulator.clear();
-            // Re-check _translationInFlight: a response may have started
-            // between when the timer was scheduled and when it fires.
             if (full.isNotEmpty && !_translationInFlight) {
               _triggerTranslation(full);
             }
@@ -453,10 +449,14 @@ class ConversationController extends StateNotifier<ConversationState> {
           state = state.copyWith(partialTranscript: '');
         }
         _responseMessageAdded = false;
-        // Clean up injected history and accumulated text after every turn.
+        // Accumulated text for THIS turn is done — clear it so a new
+        // utterance starts fresh. Do NOT call clearConversationHistory() here:
+        // it is called at the start of the NEXT requestTranslation(), by which
+        // point transcription is guaranteed complete. Calling it here risks
+        // deleting a VAD item that is mid-transcription if the user speaks
+        // while the current response is still being generated.
         _transcriptAccumulator.clear();
         _transcriptDebounce?.cancel();
-        _api.clearConversationHistory();
 
         if (state.appMode == AppMode.subtitles) {
           // Text-only: no audio playback, release the lock immediately.
@@ -546,11 +546,23 @@ class ConversationController extends StateNotifier<ConversationState> {
     final Speaker speaker;
 
     if (state.appMode == AppMode.subtitles) {
-      // Subtitles: always translate from the detected/spoken language to the
-      // configured target language. No per-speaker alternation.
       fromLang = state.detectedLang1 ?? 'the detected language';
       toLang = cfg.autoDetect ? 'English' : cfg.lang2Name;
       speaker = Speaker.user1;
+
+      // When the detected language matches the target there is nothing to
+      // translate. Show the raw transcript directly and skip the model call —
+      // avoids "I appreciate that." / "Sure!" commentary from the model when
+      // it is asked to translate English → English.
+      if (state.detectedLang1 != null &&
+          state.detectedLang1!.toLowerCase() == toLang.toLowerCase()) {
+        _pendingFrom = fromLang;
+        _pendingTo = toLang;
+        _pendingSpeaker = speaker;
+        _addMessage(transcript);
+        _resetToListening();
+        return;
+      }
     } else if (cfg.autoDetect) {
       // Translator auto-detect: _translateForward gives reliable alternation
       // regardless of whether the API returns a language code.
@@ -593,7 +605,10 @@ class ConversationController extends StateNotifier<ConversationState> {
   /// Remove any prompt framing the model may echo back verbatim.
   String _sanitizeTranslation(String text) {
     var cleaned = text;
-    cleaned = cleaned.replaceAll(RegExp(r'^LANG:[a-zA-Z]{2,3}\s+', multiLine: false), '');
+    // Strip LANG:[code] markers wherever they appear in the string.
+    // The model sometimes places them mid-output ("Heh LANG:en Heh") instead
+    // of always at the start, so a global replace is safer than ^-anchored.
+    cleaned = cleaned.replaceAll(RegExp(r'LANG:[a-zA-Z]{2,5}\s*'), '');
     cleaned = cleaned.replaceAll(RegExp(r'\s+[Ee][Nn][Dd]\s*$'), '');
     cleaned = cleaned.replaceAll(RegExp(r'^SUBTITLE_TASK\s*\|[^\n]*\n?', multiLine: true), '');
     cleaned = cleaned.replaceAll(RegExp(r'^TRANSLATE\s*\|[^\n]*\n?', multiLine: true), '');

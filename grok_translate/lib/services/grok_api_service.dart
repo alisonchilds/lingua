@@ -41,22 +41,15 @@ class GrokApiService {
   LanguageConfig? _lastLangConfig;
   VadSettings? _lastVadSettings;
 
-  // Items we inject (few-shot examples, translation requests, assistant
-  // replies) — tracked so they can be deleted after each response.
-  final List<String> _injectedItemIds = [];
+  // Every conversation item ID — both VAD audio items created by the server
+  // and items we inject (examples, requests, assistant replies).
+  // Cleared by clearConversationHistory() which is called at the start of
+  // each requestTranslation(). By that point transcription is always done
+  // (controller only calls _triggerTranslation after inputAudioTranscriptionCompleted)
+  // so it is safe to delete all items unconditionally.
+  final List<String> _allItemIds = [];
 
-  // VAD-created audio items (the server creates one per committed utterance).
-  // Tracked so they can be deleted alongside injected items before each new
-  // translation request. It is safe to delete them once transcription is
-  // complete — _triggerTranslation() is only called after receiving
-  // inputAudioTranscriptionCompleted, so by the time clearConversationHistory()
-  // runs the transcription is done. Leaving them accumulate causes the model
-  // to see all previous utterances as context and echo/repeat earlier phrases.
-  final List<String> _vadItemIds = [];
-
-  // True while we are sending conversation.item.create messages so that
-  // the corresponding conversation.item.added server events are attributed
-  // to _injectedItemIds rather than to _vadItemIds.
+  // True while we are sending conversation.item.create messages (for logging).
   bool _pendingInjection = false;
 
   Stream<GrokServerEvent> get events => _eventController.stream;
@@ -279,22 +272,18 @@ class GrokApiService {
     }
   }
 
-  /// Delete all tracked conversation items before each new translation request.
+  /// Delete every tracked conversation item before the next translation.
   ///
-  /// Removes both injected items (examples, requests, assistant replies) and
-  /// completed VAD audio items. This keeps the model context stateless — each
-  /// translation sees only the current utterance, preventing the model from
-  /// echoing or accumulating earlier transcriptions in its output.
+  /// Called exclusively from requestTranslation(), which is always triggered
+  /// after inputAudioTranscriptionCompleted — guaranteeing transcription is
+  /// complete before we delete. This keeps the model context stateless: each
+  /// translation sees only the injected examples + current request, never
+  /// accumulated audio history from previous utterances.
   void clearConversationHistory() {
-    for (final id in List<String>.from(_injectedItemIds)) {
+    for (final id in List<String>.from(_allItemIds)) {
       _send({'type': 'conversation.item.delete', 'item_id': id});
     }
-    _injectedItemIds.clear();
-
-    for (final id in List<String>.from(_vadItemIds)) {
-      _send({'type': 'conversation.item.delete', 'item_id': id});
-    }
-    _vadItemIds.clear();
+    _allItemIds.clear();
   }
 
   void updateSession({
@@ -461,17 +450,10 @@ YOU MUST FOLLOW THESE RULES WITH ZERO EXCEPTIONS:
         final itemId =
             (json['item'] as Map<String, dynamic>?)?['id'] as String?;
         if (itemId != null) {
-          if (_pendingInjection) {
-            // Item we sent — track for deletion after the response.
-            _injectedItemIds.add(itemId);
-            _log.d('Injected item tracked: $itemId');
-          } else {
-            // VAD audio item created by the server — track for deletion
-            // before the next translation request (safe once transcription
-            // is complete, which is guaranteed by our call order).
-            _vadItemIds.add(itemId);
-            _log.d('VAD item tracked: $itemId');
-          }
+          _allItemIds.add(itemId);
+          _log.d(_pendingInjection
+              ? 'Injected item tracked: $itemId'
+              : 'VAD item tracked: $itemId');
         }
         return;
       }
@@ -563,8 +545,7 @@ YOU MUST FOLLOW THESE RULES WITH ZERO EXCEPTIONS:
     _ws?.close(1000);
     _ws = null;
 
-    _injectedItemIds.clear();
-    _vadItemIds.clear();
+    _allItemIds.clear();
     _pendingInjection = false;
   }
 
