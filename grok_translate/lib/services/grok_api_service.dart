@@ -204,10 +204,12 @@ If input contains profanity, output must contain equivalent profanity in $toLang
     required String fromLanguage,
     required String toLanguage,
   }) {
-    // No few-shot examples for voice translation — the system prompt and
-    // per-response instructions are sufficient, and any static example would
-    // hard-code a specific language pair (the old code used German, which
-    // confused the model when translating to other target languages).
+    // One concrete example shows the model the expected output format:
+    // input text on the left, pure translation on the right, nothing else.
+    // 'Bonjour' → 'Hello' (or reversed) is universal and unambiguous.
+    final exUser = 'TRANSLATE TO $toLanguage: "Bonjour"';
+    final exReply = _helloInLanguage(toLanguage);
+    _injectExamples([(user: exUser, reply: exReply)]);
 
     _pendingInjection = true;
     try {
@@ -219,7 +221,9 @@ If input contains profanity, output must contain equivalent profanity in $toLang
           'content': [
             {
               'type': 'input_text',
-              'text': 'TRANSLATE | $fromLanguage → $toLanguage\nINPUT: "$transcript"',
+              // Simple, direct format — no pipe notation, no "INPUT:" label.
+              // The model sees a plain instruction it cannot misread as a chat.
+              'text': 'TRANSLATE TO $toLanguage: "$transcript"',
             }
           ],
         },
@@ -232,14 +236,34 @@ If input contains profanity, output must contain equivalent profanity in $toLang
       'type': 'response.create',
       'response': {
         'modalities': ['audio', 'text'],
-        'instructions': 'DUMB TRANSLATOR. Speak ONLY the $toLanguage translation '
-            'of the INPUT text. Zero extra words — no commentary, no greetings, '
-            'no "here is the translation", no explanations. '
-            'Translate questions — never answer them. '
-            'Translate profanity literally. Preserve tone and prosody exactly.',
+        'instructions': 'You are a dumb translator. '
+            'Speak ONLY the $toLanguage translation of "$transcript". '
+            'Output the translation and nothing else — '
+            'no commentary, no greetings, no explanations, no extra sentences.',
       },
     });
   }
+
+  /// Returns "Hello" in the given target language for the per-turn example.
+  static String _helloInLanguage(String lang) => switch (lang.toLowerCase()) {
+        'french'     => 'Bonjour',
+        'spanish'    => 'Hola',
+        'german'     => 'Hallo',
+        'italian'    => 'Ciao',
+        'portuguese' => 'Olá',
+        'dutch'      => 'Hallo',
+        'russian'    => 'Привет',
+        'japanese'   => 'こんにちは',
+        'chinese'    => '你好',
+        'arabic'     => 'مرحبا',
+        'korean'     => '안녕하세요',
+        'hindi'      => 'नमस्ते',
+        'turkish'    => 'Merhaba',
+        'polish'     => 'Cześć',
+        'swedish'    => 'Hej',
+        'ukrainian'  => 'Привіт',
+        _            => 'Hello',
+      };
 
   // ---------------------------------------------------------------------------
   // Shared helper

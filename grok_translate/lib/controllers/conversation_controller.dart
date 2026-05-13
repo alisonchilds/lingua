@@ -125,6 +125,12 @@ class ConversationController extends StateNotifier<ConversationState> {
   // translation cycle so the same phrase can be translated again next utterance.
   String? _lastTranslatedText;
 
+  // Post-playback echo gate: after audio playback finishes, room reverberation
+  // picked up by the mic can trigger a phantom second translation. This timer
+  // blocks new transcriptions for a short window after playing=false so that
+  // the acoustic echo has time to die down before VAD starts listening again.
+  Timer? _postPlaybackTimer;
+
   void _init() {
     final langCfg = _prefs.getLanguageConfig();
     final vadSettings = _prefs.getVadSettings();
@@ -156,6 +162,11 @@ class ConversationController extends StateNotifier<ConversationState> {
         _audio.setPlaying(false);
         _translationInFlight = false;
         _lastTranslatedText = null; // allow same phrase on the next utterance
+        // Start the post-playback echo gate. Room reverberation from the
+        // speaker can persist for several hundred ms after audio ends — block
+        // new transcriptions for this window to prevent phantom translations.
+        _postPlaybackTimer?.cancel();
+        _postPlaybackTimer = Timer(const Duration(milliseconds: 800), () {});
         if (state.isSessionActive) {
           _setStatus(ConversationStatus.listening);
         }
@@ -203,6 +214,7 @@ class ConversationController extends StateNotifier<ConversationState> {
   Future<void> endSession() async {
     _pendingSessionReady = false;
     _transcriptDebounce?.cancel();
+    _postPlaybackTimer?.cancel();
     _transcriptAccumulator.clear();
     _lastTranslatedText = null;
     // Always reset speaker alternation so the next session opens with User1.
@@ -342,6 +354,12 @@ class ConversationController extends StateNotifier<ConversationState> {
             .trim();
 
         if (rawText.isEmpty || _translationInFlight) break;
+        // Drop transcriptions that arrive during the post-playback echo window.
+        if (state.appMode == AppMode.translator &&
+            (_postPlaybackTimer?.isActive ?? false)) {
+          _log.d('Post-playback echo suppressed: "$rawText"');
+          break;
+        }
 
         if (state.appMode == AppMode.subtitles) {
           // Subtitles: each VAD commit is one complete phrase — use the most
@@ -750,6 +768,7 @@ class ConversationController extends StateNotifier<ConversationState> {
   @override
   void dispose() {
     _transcriptDebounce?.cancel();
+    _postPlaybackTimer?.cancel();
     _apiEventSub?.cancel();
     _micSub?.cancel();
     _connectionSub?.cancel();
