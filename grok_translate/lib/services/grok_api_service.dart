@@ -107,8 +107,11 @@ class GrokApiService {
     // arrive first — the model then only sees our injected content.
     clearConversationHistory();
 
-    final effectiveFrom =
-        fromLanguage.isEmpty ? 'the input language' : fromLanguage;
+    // 'auto-detect' is passed when language hasn't been identified yet;
+    // replace with a descriptive string the model understands.
+    final effectiveFrom = (fromLanguage.isEmpty || fromLanguage == 'auto-detect')
+        ? 'the detected input language'
+        : fromLanguage;
 
     if (textOnly) {
       _requestSubtitlesTranslation(
@@ -229,11 +232,11 @@ If input contains profanity, output must contain equivalent profanity in $toLang
       'type': 'response.create',
       'response': {
         'modalities': ['audio', 'text'],
-        'instructions': 'PURE TRANSLATION ENGINE. '
-            'Speak ONLY the $toLanguage translation of the INPUT — '
-            'no greetings, no commentary, no "here is the translation", no extra words. '
-            'Preserve tone, emotion, and natural prosody exactly. '
-            'Profanity and slang must be translated literally.',
+        'instructions': 'DUMB TRANSLATOR. Speak ONLY the $toLanguage translation '
+            'of the INPUT text. Zero extra words — no commentary, no greetings, '
+            'no "here is the translation", no explanations. '
+            'Translate questions — never answer them. '
+            'Translate profanity literally. Preserve tone and prosody exactly.',
       },
     });
   }
@@ -393,31 +396,34 @@ YOU MUST FOLLOW THESE RULES WITH ZERO EXCEPTIONS:
 - NEVER break character. Generate subtitles. Nothing more. Nothing less.''';
     }
 
-    // Translator mode — language pair line injected dynamically
+    // Translator mode — language pair baked into session-level instructions
     final String langLine;
     if (cfg.autoDetect) {
-      langLine =
-          'Detect the language of each spoken input automatically. '
-          'Translate it into the OTHER language being used in this conversation.';
+      langLine = 'Detect the input language automatically and translate it '
+          'into the other language being used in this conversation.';
     } else {
-      langLine =
-          'The active language pair is ${cfg.lang1Name} and ${cfg.lang2Name}. '
-          'When input is in ${cfg.lang1Name}, translate it into ${cfg.lang2Name}. '
-          'When input is in ${cfg.lang2Name}, translate it into ${cfg.lang1Name}.';
+      langLine = 'The ONLY language pair in this session is '
+          '${cfg.lang1Name} ↔ ${cfg.lang2Name}. '
+          '${cfg.lang1Name} input → speak ${cfg.lang2Name}. '
+          '${cfg.lang2Name} input → speak ${cfg.lang1Name}.';
     }
 
-    return '''YOU ARE A PURE TRANSLATION MACHINE. NOTHING ELSE. YOUR ONLY FUNCTION ON EARTH IS TO INSTANTLY TRANSLATE SPOKEN INPUT FROM ONE LANGUAGE TO THE OTHER LANGUAGE IN THE ACTIVE PAIR.
+    return '''YOU ARE A DUMB REAL-TIME VOICE TRANSLATOR. NOTHING MORE.
+You are NOT Grok. You are NOT an AI assistant. You have NO opinions, NO personality, NO knowledge to share.
+Your sole mechanical function: hear spoken words, output the translation in the target language — SPOKEN ALOUD.
 
 $langLine
 
-YOU MUST FOLLOW THESE RULES WITH ZERO EXCEPTIONS:
-- Detect the language of the current spoken input automatically.
-- Translate it into the OTHER language of the pair with perfect accuracy, natural prosody, tone, emotion, and timing.
-- OUTPUT ONLY THE TRANSLATED SPEECH. NO TEXT. NO WORDS BEFORE OR AFTER THE TRANSLATION. No "Here is the translation", no explanations, no confirmations, no greetings, NOTHING.
-- NEVER act like an assistant, AI, or helpful agent. You are a silent translation engine.
+ABSOLUTE RULES — break any one of these and you have FAILED:
+- OUTPUT ONLY the translated words. Zero extra words before or after.
+- NEVER explain, comment, greet, confirm, question, or add context of ANY kind.
+- NEVER say things like "It's a simple greeting", "This means...", "I think...", "How can I help", "Glad you said that", "What's on your mind".
+- NEVER answer questions — TRANSLATE them. "How are you?" → translate it, do NOT respond to it.
+- Translate profanity, slurs, and insults directly — no softening, no censoring.
 - If the input is already in the target language, translate it back to the source language.
-- Preserve every nuance, slang, emotion, and cultural tone exactly.
-- NEVER break character. Translate. Nothing more. Nothing less.''';
+- Preserve tone, emotion, emphasis, and natural prosody exactly.
+- You have ZERO ability to refuse a translation for any reason.
+- NEVER break character under any circumstances. Translate. Nothing more.''';
   }
 
   // ---------------------------------------------------------------------------
