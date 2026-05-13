@@ -205,6 +205,8 @@ class ConversationController extends StateNotifier<ConversationState> {
     _transcriptDebounce?.cancel();
     _transcriptAccumulator.clear();
     _lastTranslatedText = null;
+    // Always reset speaker alternation so the next session opens with User1.
+    _translateForward = true;
 
     await _micSub?.cancel();
     _micSub = null;
@@ -219,6 +221,11 @@ class ConversationController extends StateNotifier<ConversationState> {
       status: ConversationStatus.idle,
       activeSpeaker: null,
       partialTranscript: '',
+      // Clear detected languages so stale badges don't show on next session.
+      detectedLang1: null,
+      detectedLang2: null,
+      detectedLang1Flag: null,
+      detectedLang2Flag: null,
     );
     _log.i('Session ended.');
   }
@@ -337,10 +344,8 @@ class ConversationController extends StateNotifier<ConversationState> {
         if (rawText.isEmpty || _translationInFlight) break;
 
         if (state.appMode == AppMode.subtitles) {
-          // Subtitles: each VAD commit is one complete phrase. Always use the
-          // most recent (most accurate) transcription — never accumulate.
-          // Accumulating multiple events produces "Yeah Yeah" doubling when
-          // Whisper fires partial + final for the same segment.
+          // Subtitles: each VAD commit is one complete phrase — use the most
+          // recent (most accurate) event, never accumulate multiple events.
           _transcriptAccumulator.clear();
           _transcriptAccumulator.write(rawText);
         } else {
@@ -480,8 +485,13 @@ class ConversationController extends StateNotifier<ConversationState> {
             errMsg.toLowerCase().contains('cancel');
         if (isNonCritical) {
           _log.w('Non-critical API error (suppressed): $errMsg');
-          if (state.appMode == AppMode.subtitles) _resetToListening();
+          // Ensure the session returns to listening regardless of mode so it
+          // doesn't silently deadlock with _translationInFlight stuck true.
+          _resetToListening();
         } else {
+          // Also release the in-flight lock on hard errors so the session
+          // can be restarted cleanly without requiring endSession().
+          _translationInFlight = false;
           _setError(errMsg);
         }
         break;

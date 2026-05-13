@@ -201,16 +201,10 @@ If input contains profanity, output must contain equivalent profanity in $toLang
     required String fromLanguage,
     required String toLanguage,
   }) {
-    _injectExamples([
-      (
-        user:  'TRANSLATE | $fromLanguage → $toLanguage\nINPUT: "Guten Tag"',
-        reply: 'Good day',
-      ),
-      (
-        user:  'TRANSLATE | $fromLanguage → $toLanguage\nINPUT: "How are you doing?"',
-        reply: fromLanguage == toLanguage ? 'How are you doing?' : 'Wie geht es Ihnen?',
-      ),
-    ]);
+    // No few-shot examples for voice translation — the system prompt and
+    // per-response instructions are sufficient, and any static example would
+    // hard-code a specific language pair (the old code used German, which
+    // confused the model when translating to other target languages).
 
     _pendingInjection = true;
     try {
@@ -235,10 +229,11 @@ If input contains profanity, output must contain equivalent profanity in $toLang
       'type': 'response.create',
       'response': {
         'modalities': ['audio', 'text'],
-        'instructions':
-            'You are a real-time voice interpreter. '
-            'Speak ONLY the $toLanguage translation of the INPUT. '
-            'No greetings, no markers, no "end", no extra words.',
+        'instructions': 'PURE TRANSLATION ENGINE. '
+            'Speak ONLY the $toLanguage translation of the INPUT — '
+            'no greetings, no commentary, no "here is the translation", no extra words. '
+            'Preserve tone, emotion, and natural prosody exactly. '
+            'Profanity and slang must be translated literally.',
       },
     });
   }
