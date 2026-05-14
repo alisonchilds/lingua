@@ -61,15 +61,18 @@ class GrokApiService {
   // ---------------------------------------------------------------------------
 
   AppMode _appMode = AppMode.translator;
+  String _voiceId = 'eve';
 
   Future<void> connect({
     required LanguageConfig languageConfig,
     required VadSettings vadSettings,
     AppMode appMode = AppMode.translator,
+    String voiceId = 'eve',
   }) async {
     _lastLangConfig = languageConfig;
     _lastVadSettings = vadSettings;
     _appMode = appMode;
+    _voiceId = voiceId.trim().isEmpty ? 'eve' : voiceId.trim();
     await _connect(languageConfig: languageConfig, vadSettings: vadSettings);
   }
 
@@ -360,9 +363,13 @@ If input contains profanity, output must contain equivalent profanity in $toLang
   void updateSession({
     required LanguageConfig languageConfig,
     required VadSettings vadSettings,
+    String? voiceId,
   }) {
     _lastLangConfig = languageConfig;
     _lastVadSettings = vadSettings;
+    if (voiceId != null && voiceId.trim().isNotEmpty) {
+      _voiceId = voiceId.trim();
+    }
     _sendSessionUpdate(languageConfig: languageConfig, vadSettings: vadSettings);
   }
 
@@ -425,7 +432,7 @@ If input contains profanity, output must contain equivalent profanity in $toLang
       'session': {
         'model': _model,
         'instructions': instructions,
-        'voice': 'eve',
+        'voice': _voiceId,
         'audio': {
           'input': {'format': {'type': 'audio/pcm', 'rate': 16000}},
           'output': {'format': {'type': 'audio/pcm', 'rate': 16000}},

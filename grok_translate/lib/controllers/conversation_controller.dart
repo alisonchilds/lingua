@@ -207,6 +207,7 @@ class ConversationController extends StateNotifier<ConversationState> {
       languageConfig: langCfg,
       vadSettings: vadSettings,
       appMode: state.appMode,
+      voiceId: _prefs.getVoiceId(),
     );
 
     // Mic starts in _onSessionReady() once session.updated is received,

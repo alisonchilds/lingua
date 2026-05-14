@@ -67,6 +67,13 @@ class PreferencesService {
   Future<void> setSubtitlesEnabled(bool value) =>
       _prefs.setBool(_keySubtitlesEnabled, value);
 
+  // Voice — built-in voice name ('eve', 'ara', 'rex', 'sal', 'leo') or a
+  // custom voice_id created in the xAI console. Defaults to 'eve'.
+  static const _keyVoiceId = 'voice_id';
+
+  String getVoiceId() => _prefs.getString(_keyVoiceId) ?? 'eve';
+  Future<void> setVoiceId(String id) => _prefs.setString(_keyVoiceId, id);
+
   // My Language — the user's own primary language.
   // Used as the pre-selected lang1 in the setup screen and as the
   // fallback source language in auto-detect mode before the API identifies
