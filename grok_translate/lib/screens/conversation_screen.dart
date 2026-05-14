@@ -28,9 +28,11 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(conversationControllerProvider.notifier).startSession();
-    });
+    // Session starts only when the user taps the Listen circle — not automatically.
+  }
+
+  void _startSession() {
+    ref.read(conversationControllerProvider.notifier).startSession();
   }
 
   @override
@@ -52,10 +54,7 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
 
   Future<void> _endSession() async {
     await ref.read(conversationControllerProvider.notifier).endSession();
-    // Restart a fresh session — user stays on the Listen home screen
-    if (mounted) {
-      ref.read(conversationControllerProvider.notifier).startSession();
-    }
+    // Return to the idle Listen circle — user taps it again to restart.
   }
 
   void _submitTestInput() {
@@ -92,6 +91,7 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
             testInputController: _testInputController,
             onToggleTest: () => setState(() => _showTestInput = !_showTestInput),
             onSubmitTest: _submitTestInput,
+            onStart: _startSession,
             onEnd: _endSession,
             hasAudio: ref.read(conversationControllerProvider.notifier).hasAudio,
             onReplay: (id) => ref
@@ -183,6 +183,7 @@ class _TranslateTab extends StatelessWidget {
     required this.testInputController,
     required this.onToggleTest,
     required this.onSubmitTest,
+    required this.onStart,
     required this.onEnd,
     required this.hasAudio,
     required this.onReplay,
@@ -194,6 +195,7 @@ class _TranslateTab extends StatelessWidget {
   final TextEditingController testInputController;
   final VoidCallback onToggleTest;
   final VoidCallback onSubmitTest;
+  final VoidCallback onStart;
   final VoidCallback onEnd;
   final bool Function(String id) hasAudio;
   final void Function(String id) onReplay;
@@ -213,7 +215,11 @@ class _TranslateTab extends StatelessWidget {
         // ── Message list or empty "Listen" state ───────────────────────────
         Expanded(
           child: state.messages.isEmpty && state.partialTranscript.isEmpty
-              ? _ListenEmptyState(status: state.status)
+              ? _ListenEmptyState(
+                  status: state.status,
+                  isSessionActive: state.isSessionActive,
+                  onStart: onStart,
+                )
               : _MessageList(
                   messages: state.messages,
                   scrollController: scrollController,
@@ -231,9 +237,10 @@ class _TranslateTab extends StatelessWidget {
             isActive: state.isSessionActive,
           ),
 
-        // ── Status + control bar ───────────────────────────────────────────
+        // ── Status + control bar (hidden until session starts) ────────────
         _StatusBar(
           status: state.status,
+          isSessionActive: state.isSessionActive,
           onEnd: onEnd,
           onToggleTest: onToggleTest,
           showTestInput: showTestInput,
@@ -461,48 +468,88 @@ class _LanguagePickerSheetState extends State<_LanguagePickerSheet> {
 // ── Empty "Listen" state ───────────────────────────────────────────────────────
 
 class _ListenEmptyState extends StatelessWidget {
-  const _ListenEmptyState({required this.status});
+  const _ListenEmptyState({
+    required this.status,
+    required this.isSessionActive,
+    required this.onStart,
+  });
   final ConversationStatus status;
+  final bool isSessionActive;
+  final VoidCallback onStart;
 
   @override
   Widget build(BuildContext context) {
-    final isActive = status == ConversationStatus.listening ||
-        status == ConversationStatus.speaking;
+    final isListening = status == ConversationStatus.listening;
+    final isStarting = isSessionActive && !isListening;
+
+    // Label below the circle
+    final label = !isSessionActive
+        ? 'Tap to listen'
+        : isListening
+            ? 'Listening…'
+            : 'Starting…';
+
+    // The circle pulses only when actively listening
+    Widget circle = Container(
+      width: 130,
+      height: 130,
+      decoration: BoxDecoration(
+        color: isSessionActive ? AppTheme.magenta : const Color(0xFFDDDDDD),
+        shape: BoxShape.circle,
+        boxShadow: isSessionActive
+            ? [
+                BoxShadow(
+                  color: AppTheme.magenta.withValues(alpha: 0.35),
+                  blurRadius: 24,
+                  spreadRadius: 4,
+                ),
+              ]
+            : [],
+      ),
+      child: Icon(
+        isSessionActive ? Icons.graphic_eq_rounded : Icons.mic_none_rounded,
+        color: Colors.white,
+        size: 54,
+      ),
+    );
+
+    if (isListening) {
+      circle = circle
+          .animate(onPlay: (c) => c.repeat(reverse: true))
+          .scale(
+            begin: const Offset(1, 1),
+            end: const Offset(1.07, 1.07),
+            duration: 900.ms,
+            curve: Curves.easeInOut,
+          );
+    }
 
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Large magenta circle with waveform
-          Container(
-            width: 120,
-            height: 120,
-            decoration: const BoxDecoration(
-              color: AppTheme.magenta,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.graphic_eq_rounded,
-              color: Colors.white,
-              size: 52,
-            ),
-          )
-              .animate(onPlay: isActive ? (c) => c.repeat(reverse: true) : null)
-              .scale(
-                begin: const Offset(1, 1),
-                end: const Offset(1.06, 1.06),
-                duration: 900.ms,
-                curve: Curves.easeInOut,
-              ),
-          const SizedBox(height: 20),
+          GestureDetector(
+            onTap: isSessionActive ? null : onStart,
+            child: circle,
+          ),
+          const SizedBox(height: 22),
           Text(
-            status == ConversationStatus.listening ? 'Listen' : 'Starting…',
-            style: const TextStyle(
-              fontSize: 24,
+            label,
+            style: TextStyle(
+              fontSize: 22,
               fontWeight: FontWeight.w700,
-              color: Color(0xFF1A1A1A),
+              color: isSessionActive
+                  ? AppTheme.magenta
+                  : const Color(0xFF888888),
             ),
           ),
+          if (!isSessionActive) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'Tap the circle to start',
+              style: TextStyle(fontSize: 14, color: Color(0xFFAAAAAA)),
+            ),
+          ],
         ],
       ),
     );
@@ -559,12 +606,14 @@ class _MessageList extends StatelessWidget {
 class _StatusBar extends StatelessWidget {
   const _StatusBar({
     required this.status,
+    required this.isSessionActive,
     required this.onEnd,
     required this.onToggleTest,
     required this.showTestInput,
   });
 
   final ConversationStatus status;
+  final bool isSessionActive;
   final VoidCallback onEnd;
   final VoidCallback onToggleTest;
   final bool showTestInput;
@@ -579,6 +628,8 @@ class _StatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (!isSessionActive) return const SizedBox.shrink();
+
     return Container(
       color: AppTheme.cream,
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
