@@ -2,12 +2,34 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../controllers/conversation_controller.dart';
+import '../models/conversation_models.dart';
+import '../widgets/language_selector.dart';
 
-class SettingsScreen extends ConsumerWidget {
+class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+  late String _myLangCode;
+
+  @override
+  void initState() {
+    super.initState();
+    final prefs = ref.read(preferencesServiceProvider);
+    _myLangCode = prefs.getMyLanguageCode();
+  }
+
+  Future<void> _setMyLanguage(String code) async {
+    final lang = kSupportedLanguages.firstWhere((l) => l.code == code);
+    await ref.read(preferencesServiceProvider).setMyLanguage(code, lang.name);
+    if (mounted) setState(() => _myLangCode = code);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(conversationControllerProvider);
     final controller = ref.read(conversationControllerProvider.notifier);
     final theme = Theme.of(context);
@@ -17,6 +39,32 @@ class SettingsScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // ── My Language ────────────────────────────────────────────────────
+          const _SectionHeader('Language'),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  LanguageSelector(
+                    label: 'My Language',
+                    selectedCode: _myLangCode,
+                    showAuto: false,
+                    onChanged: _setMyLanguage,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Your primary language. Used as the default source '
+                    'language in auto-detect mode.',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.outline),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
           // Subtitles
           const _SectionHeader('Display'),
           Card(

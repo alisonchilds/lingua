@@ -23,6 +23,8 @@ class PreferencesService {
   static const _keyLanguageConfig = 'language_config';
   static const _keyVadSettings = 'vad_settings';
   static const _keySubtitlesEnabled = 'subtitles_enabled';
+  static const _keyMyLanguageCode = 'my_language_code';
+  static const _keyMyLanguageName = 'my_language_name';
 
   final SharedPreferences _prefs;
   PreferencesService(this._prefs);
@@ -64,4 +66,16 @@ class PreferencesService {
   bool getSubtitlesEnabled() => _prefs.getBool(_keySubtitlesEnabled) ?? true;
   Future<void> setSubtitlesEnabled(bool value) =>
       _prefs.setBool(_keySubtitlesEnabled, value);
+
+  // My Language — the user's own primary language.
+  // Used as the pre-selected lang1 in the setup screen and as the
+  // fallback source language in auto-detect mode before the API identifies
+  // the spoken language. Defaults to English.
+  String getMyLanguageCode() => _prefs.getString(_keyMyLanguageCode) ?? 'en';
+  String getMyLanguageName() => _prefs.getString(_keyMyLanguageName) ?? 'English';
+
+  Future<void> setMyLanguage(String code, String name) async {
+    await _prefs.setString(_keyMyLanguageCode, code);
+    await _prefs.setString(_keyMyLanguageName, name);
+  }
 }

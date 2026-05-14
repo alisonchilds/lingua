@@ -24,8 +24,19 @@ class _LanguageSetupScreenState extends ConsumerState<LanguageSetupScreen> {
   void initState() {
     super.initState();
     final s = ref.read(conversationControllerProvider);
-    _config = s.languageConfig ?? const LanguageConfig();
+    final prefs = ref.read(preferencesServiceProvider);
     _mode = s.appMode;
+
+    var cfg = s.languageConfig ?? const LanguageConfig();
+    // If lang1 is still the default 'auto' placeholder, pre-fill it with
+    // the user's language from Settings (defaults to English on first launch).
+    if (cfg.lang1Code == 'auto') {
+      cfg = cfg.copyWith(
+        lang1Code: prefs.getMyLanguageCode(),
+        lang1Name: prefs.getMyLanguageName(),
+      );
+    }
+    _config = cfg;
   }
 
   Future<void> _start() async {

@@ -580,8 +580,8 @@ class ConversationController extends StateNotifier<ConversationState> {
     final Speaker speaker;
 
     if (state.appMode == AppMode.subtitles) {
-      fromLang = state.detectedLang1 ?? 'auto-detect';
-      toLang = cfg.autoDetect ? 'English' : cfg.lang2Name;
+      fromLang = state.detectedLang1 ?? _prefs.getMyLanguageName();
+      toLang = cfg.autoDetect ? _prefs.getMyLanguageName() : cfg.lang2Name;
       speaker = Speaker.user1;
 
       // When the detected language matches the target there is nothing to
@@ -598,12 +598,11 @@ class ConversationController extends StateNotifier<ConversationState> {
         return;
       }
     } else if (cfg.autoDetect) {
-      // Translator auto-detect: _translateForward gives reliable alternation
-      // regardless of whether the API returns a language code.
-      // Use 'auto-detect' instead of 'the detected language' when the first
-      // language hasn't been identified yet — it's a cleaner instruction to
-      // the model AND a more readable label in the translation bubble.
-      final d1 = state.detectedLang1 ?? 'auto-detect';
+      // Use the user's own language as the fallback before auto-detect kicks in.
+      // This gives the first utterance a concrete source language ('English')
+      // rather than 'auto-detect', making the translation request unambiguous.
+      final myLang = _prefs.getMyLanguageName();
+      final d1 = state.detectedLang1 ?? myLang;
       final d2 = state.detectedLang2 ??
           (d1.toLowerCase() == 'english' ? 'French' : 'English');
       if (_translateForward) {
