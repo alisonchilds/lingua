@@ -97,31 +97,30 @@ class GrokApiService {
     required String fromLanguage,
     required String toLanguage,
     bool textOnly = false,
+    String? myLanguage,  // non-null triggers bidirectional auto-detect mode
   }) {
     if (!textOnly) {
       _send({'type': 'response.cancel'});
     }
 
-    // Delete ALL conversation items (including the VAD audio item) before
-    // injecting anything. Server processes messages in order so deletes
-    // arrive first — the model then only sees our injected content.
     clearConversationHistory();
-
-    // 'auto-detect' is passed when language hasn't been identified yet;
-    // replace with a descriptive string the model understands.
-    final effectiveFrom = (fromLanguage.isEmpty || fromLanguage == 'auto-detect')
-        ? 'the detected input language'
-        : fromLanguage;
 
     if (textOnly) {
       _requestSubtitlesTranslation(
         transcript: transcript,
         toLanguage: toLanguage,
       );
+    } else if (myLanguage != null) {
+      // Pre-detection bidirectional mode: neither speaker's language is known.
+      // The model detects the language and routes: myLanguage→out, other→myLanguage.
+      _requestVoiceTranslationBiDir(
+        transcript: transcript,
+        myLanguage: myLanguage,
+      );
     } else {
       _requestVoiceTranslation(
         transcript: transcript,
-        fromLanguage: effectiveFrom,
+        fromLanguage: fromLanguage,
         toLanguage: toLanguage,
       );
     }
@@ -264,6 +263,49 @@ If input contains profanity, output must contain equivalent profanity in $toLang
         'ukrainian'  => 'Привіт',
         _            => 'Hello',
       };
+
+  // ---------------------------------------------------------------------------
+  // Translator mode — bidirectional auto-detect (pre-detection first utterance)
+  // ---------------------------------------------------------------------------
+
+  /// Used before any language has been detected so we cannot know which
+  /// direction to translate. Tells the model to detect the language itself:
+  ///   • if input is in [myLanguage] → translate to whatever the partner speaks
+  ///   • if input is NOT in [myLanguage] → translate to [myLanguage]
+  void _requestVoiceTranslationBiDir({
+    required String transcript,
+    required String myLanguage,
+  }) {
+    _pendingInjection = true;
+    try {
+      _send({
+        'type': 'conversation.item.create',
+        'item': {
+          'type': 'message',
+          'role': 'user',
+          'content': [
+            {
+              'type': 'input_text',
+              'text': 'AUTO-TRANSLATE: "$transcript"',
+            }
+          ],
+        },
+      });
+    } finally {
+      _pendingInjection = false;
+    }
+
+    _send({
+      'type': 'response.create',
+      'response': {
+        'modalities': ['audio', 'text'],
+        'instructions': 'Dumb translator — detect language of "$transcript" then:\n'
+            '• If it IS $myLanguage: speak its translation into the other language.\n'
+            '• If it is NOT $myLanguage: speak its translation into $myLanguage.\n'
+            'Speak ONLY the translation. Zero extra words.',
+      },
+    });
+  }
 
   // ---------------------------------------------------------------------------
   // Shared helper

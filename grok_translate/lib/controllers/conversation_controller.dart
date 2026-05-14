@@ -598,19 +598,36 @@ class ConversationController extends StateNotifier<ConversationState> {
         return;
       }
     } else if (cfg.autoDetect) {
-      // Use the user's own language as the fallback before auto-detect kicks in.
-      // This gives the first utterance a concrete source language ('English')
-      // rather than 'auto-detect', making the translation request unambiguous.
       final myLang = _prefs.getMyLanguageName();
-      final d1 = state.detectedLang1 ?? myLang;
-      final d2 = state.detectedLang2 ??
-          (d1.toLowerCase() == 'english' ? 'French' : 'English');
-      if (_translateForward) {
-        fromLang = d1; toLang = d2; speaker = Speaker.user1;
+
+      if (state.detectedLang1 == null) {
+        // ── Pre-detection: neither speaker's language is known yet ──────────
+        // We cannot know which person spoke first, so use a direction-neutral
+        // request: tell the model to detect the language and route correctly.
+        //   • Other person speaks first (e.g. French) → model translates to myLang ✓
+        //   • User speaks first (myLang) → model translates to their partner's language ✓
+        // fromLang/toLang are for the bubble label only; the model overrides.
+        fromLang = 'auto';
+        toLang = myLang;
+        speaker = Speaker.user1; // best guess until detection arrives
+        // Do NOT flip _translateForward — direction isn't reliable until detection.
       } else {
-        fromLang = d2; toLang = d1; speaker = Speaker.user2;
+        // ── Post-detection: use activeSpeaker set by _updateDetectedLanguage ─
+        // activeSpeaker is Speaker.user1 when the current input matches
+        // detectedLang1, Speaker.user2 when it matches detectedLang2.
+        final d1 = state.detectedLang1!;
+        final d2 = state.detectedLang2 ??
+            (d1.toLowerCase() == 'english' ? 'French' : 'English');
+
+        if (state.activeSpeaker == Speaker.user2) {
+          fromLang = d2; toLang = myLang; speaker = Speaker.user2;
+        } else {
+          fromLang = d1; toLang = d2; speaker = Speaker.user1;
+        }
+        // Sync _translateForward to match reality so barge-in / reconnect
+        // keep the right direction.
+        _translateForward = speaker == Speaker.user1 ? false : true;
       }
-      _translateForward = !_translateForward;
     } else {
       // Translator fixed-language: alternate speakers.
       if (_translateForward) {
@@ -635,6 +652,7 @@ class ConversationController extends StateNotifier<ConversationState> {
       fromLanguage: fromLang,
       toLanguage: toLang,
       textOnly: textOnly,
+      myLanguage: fromLang == 'auto' ? _prefs.getMyLanguageName() : null,
     );
   }
 
