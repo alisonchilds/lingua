@@ -106,6 +106,7 @@ class ConversationController extends StateNotifier<ConversationState> {
   String? _pendingFrom;
   String? _pendingTo;
   Speaker? _pendingSpeaker;
+  String? _pendingTranscript; // original spoken/typed text shown small in the bubble
   bool _responseMessageAdded = false;
 
   // Translator mode: true while a response is in-flight (including audio
@@ -530,6 +531,7 @@ class ConversationController extends StateNotifier<ConversationState> {
     final speaker = _pendingSpeaker ?? Speaker.user1;
     final from = _pendingFrom ?? (state.languageConfig?.lang1Name ?? 'Language 1');
     final to = _pendingTo ?? (state.languageConfig?.lang2Name ?? 'Language 2');
+    final original = _pendingTranscript ?? '';
 
     // Extract LANG:[code] prefix the model adds in Subtitles mode.
     String textForSanitization = translatedText.trim();
@@ -551,7 +553,7 @@ class ConversationController extends StateNotifier<ConversationState> {
     final msg = TranslationMessage(
       id: _uuid.v4(),
       speaker: speaker,
-      originalText: '',
+      originalText: original,
       translatedText: sanitized,
       fromLanguage: from,
       toLanguage: to,
@@ -692,6 +694,7 @@ class ConversationController extends StateNotifier<ConversationState> {
     _pendingFrom = fromLang;
     _pendingTo = toLang;
     _pendingSpeaker = speaker;
+    _pendingTranscript = transcript; // stored so _addMessage can put it in the bubble
     _responseMessageAdded = false;
     _translationInFlight = true;
 
