@@ -14,7 +14,7 @@ class AppRouter {
   static const pathSettings = '/settings';
 
   static final router = GoRouter(
-    initialLocation: pathSetup,
+    initialLocation: pathConversation, // conversation screen is the home screen
     routes: [
       GoRoute(
         path: pathSetup,

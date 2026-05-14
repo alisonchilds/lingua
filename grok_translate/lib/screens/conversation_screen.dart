@@ -7,6 +7,7 @@ import '../controllers/conversation_controller.dart';
 import '../models/conversation_models.dart';
 import '../router/app_router.dart';
 import '../theme/app_theme.dart';
+import '../widgets/language_selector.dart';
 import '../widgets/translation_bubble.dart';
 
 class ConversationScreen extends ConsumerStatefulWidget {
@@ -51,7 +52,10 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
 
   Future<void> _endSession() async {
     await ref.read(conversationControllerProvider.notifier).endSession();
-    if (mounted) context.go(AppRouter.pathSetup);
+    // Restart a fresh session — user stays on the Listen home screen
+    if (mounted) {
+      ref.read(conversationControllerProvider.notifier).startSession();
+    }
   }
 
   void _submitTestInput() {
@@ -241,15 +245,53 @@ class _TranslateTab extends StatelessWidget {
 
 // ── Language pills ─────────────────────────────────────────────────────────────
 
-class _LanguagePills extends StatelessWidget {
+class _LanguagePills extends ConsumerWidget {
   const _LanguagePills({required this.state});
   final ConversationState state;
 
-  @override
-  Widget build(BuildContext context) {
+  void _pick(BuildContext context, WidgetRef ref, {required bool isLeft}) {
     final cfg = state.languageConfig ?? const LanguageConfig();
-    final lang1 = state.detectedLang1 ?? (cfg.autoDetect ? 'Auto' : cfg.lang1Name);
-    final lang2 = state.detectedLang2 ?? (cfg.autoDetect ? 'Auto' : cfg.lang2Name);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _LanguagePickerSheet(
+        title: isLeft ? 'My Language' : 'Partner\'s Language',
+        selectedCode: isLeft ? cfg.lang1Code : cfg.lang2Code,
+        onSelect: (lang) {
+          Navigator.of(context).pop();
+          final notifier = ref.read(conversationControllerProvider.notifier);
+          final newCfg = isLeft
+              ? cfg.copyWith(
+                  lang1Code: lang.code,
+                  lang1Name: lang.name,
+                  autoDetect: cfg.lang2Code == 'auto',
+                )
+              : cfg.copyWith(
+                  lang2Code: lang.code,
+                  lang2Name: lang.name,
+                  autoDetect: lang.code == 'auto',
+                );
+          notifier.setLanguageConfig(newCfg);
+          // Also persist as myLanguage when the user updates the left pill
+          if (isLeft && lang.code != 'auto') {
+            ref.read(preferencesServiceProvider).setMyLanguage(lang.code, lang.name);
+          }
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cfg = state.languageConfig ?? const LanguageConfig();
+
+    // Left: always show the configured language (from myLanguage / lang1), not "Auto"
+    final lang1 = state.detectedLang1 ??
+        (cfg.lang1Code == 'auto' ? 'English' : cfg.lang1Name);
+    // Right: show detected partner language, configured lang2, or 'Auto'
+    final lang2 = state.detectedLang2 ??
+        (cfg.lang2Code == 'auto' ? 'Auto' : cfg.lang2Name);
 
     return Container(
       color: AppTheme.dark,
@@ -257,13 +299,19 @@ class _LanguagePills extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          _Pill(label: lang1),
+          _Pill(
+            label: lang1,
+            onTap: () => _pick(context, ref, isLeft: true),
+          ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Icon(Icons.swap_horiz_rounded,
                 color: Colors.white.withValues(alpha: 0.7), size: 20),
           ),
-          _Pill(label: lang2),
+          _Pill(
+            label: lang2,
+            onTap: () => _pick(context, ref, isLeft: false),
+          ),
         ],
       ),
     );
@@ -271,24 +319,140 @@ class _LanguagePills extends StatelessWidget {
 }
 
 class _Pill extends StatelessWidget {
-  const _Pill({required this.label});
+  const _Pill({required this.label, required this.onTap});
   final String label;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFF2C2C2E),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w600,
-          fontSize: 14,
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2C2C2E),
+          borderRadius: BorderRadius.circular(20),
         ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Icon(Icons.keyboard_arrow_down_rounded,
+                color: Colors.white54, size: 16),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Language picker sheet ──────────────────────────────────────────────────────
+
+class _LanguagePickerSheet extends StatefulWidget {
+  const _LanguagePickerSheet({
+    required this.title,
+    required this.selectedCode,
+    required this.onSelect,
+  });
+  final String title;
+  final String selectedCode;
+  final void Function(SupportedLanguage lang) onSelect;
+
+  @override
+  State<_LanguagePickerSheet> createState() => _LanguagePickerSheetState();
+}
+
+class _LanguagePickerSheetState extends State<_LanguagePickerSheet> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = kSupportedLanguages
+        .where((l) =>
+            l.name.toLowerCase().contains(_query.toLowerCase()))
+        .toList();
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle
+          Container(
+            margin: const EdgeInsets.only(top: 12, bottom: 8),
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2)),
+          ),
+          // Title
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+            child: Text(widget.title,
+                style: const TextStyle(
+                    fontSize: 17, fontWeight: FontWeight.w700)),
+          ),
+          // Search field
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextField(
+              autofocus: true,
+              decoration: InputDecoration(
+                hintText: 'Search language…',
+                prefixIcon: const Icon(Icons.search, size: 20),
+                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                isDense: true,
+              ),
+              onChanged: (v) => setState(() => _query = v),
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Language list
+          ConstrainedBox(
+            constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.45),
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: filtered.length,
+              itemBuilder: (_, i) {
+                final lang = filtered[i];
+                final selected = lang.code == widget.selectedCode;
+                return ListTile(
+                  leading: Text(lang.flag,
+                      style: const TextStyle(fontSize: 22)),
+                  title: Text(lang.name,
+                      style: TextStyle(
+                          fontWeight: selected
+                              ? FontWeight.w700
+                              : FontWeight.w400)),
+                  trailing: selected
+                      ? const Icon(Icons.check_circle_rounded,
+                          color: AppTheme.magenta)
+                      : null,
+                  onTap: () => widget.onSelect(lang),
+                  dense: true,
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
       ),
     );
   }
