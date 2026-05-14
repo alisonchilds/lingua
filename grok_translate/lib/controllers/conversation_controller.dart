@@ -578,6 +578,23 @@ class ConversationController extends StateNotifier<ConversationState> {
   }
 
   // ---------------------------------------------------------------------------
+  // Test / debug API
+  // ---------------------------------------------------------------------------
+
+  /// Inject arbitrary text directly into the translation pipeline, bypassing
+  /// the microphone and VAD. Useful for testing translation logic without
+  /// needing to speak. No-op if no session is active or a translation is
+  /// already in flight.
+  void translateText(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty || !state.isSessionActive || _translationInFlight) {
+      return;
+    }
+    _log.i('[TEST INPUT] "$trimmed"');
+    _triggerTranslation(trimmed);
+  }
+
+  // ---------------------------------------------------------------------------
   // Replay API
   // ---------------------------------------------------------------------------
 

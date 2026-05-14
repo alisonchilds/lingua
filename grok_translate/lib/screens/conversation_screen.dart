@@ -18,6 +18,8 @@ class ConversationScreen extends ConsumerStatefulWidget {
 
 class _ConversationScreenState extends ConsumerState<ConversationScreen> {
   final _scrollController = ScrollController();
+  final _testInputController = TextEditingController();
+  bool _showTestInput = false;
 
   @override
   void initState() {
@@ -30,7 +32,15 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _testInputController.dispose();
     super.dispose();
+  }
+
+  void _submitTestInput() {
+    final text = _testInputController.text.trim();
+    if (text.isEmpty) return;
+    ref.read(conversationControllerProvider.notifier).translateText(text);
+    _testInputController.clear();
   }
 
   void _scrollToBottom() {
@@ -119,9 +129,24 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
       ),
 
       // ── Compact bottom status bar ────────────────────────────────────────────
-      bottomNavigationBar: _BottomBar(
-        status: state.status,
-        onEnd: _endSession,
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Test input panel — shown when toggled
+          if (_showTestInput)
+            _TestInputBar(
+              controller: _testInputController,
+              onSubmit: _submitTestInput,
+              isSessionActive: state.isSessionActive,
+            ),
+          _BottomBar(
+            status: state.status,
+            onEnd: _endSession,
+            showTestInput: _showTestInput,
+            onToggleTestInput: () =>
+                setState(() => _showTestInput = !_showTestInput),
+          ),
+        ],
       ),
     );
   }
@@ -132,9 +157,16 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
 // indicator in the centre and the End Session button on the right.
 
 class _BottomBar extends StatelessWidget {
-  const _BottomBar({required this.status, required this.onEnd});
+  const _BottomBar({
+    required this.status,
+    required this.onEnd,
+    required this.showTestInput,
+    required this.onToggleTestInput,
+  });
   final ConversationStatus status;
   final VoidCallback onEnd;
+  final bool showTestInput;
+  final VoidCallback onToggleTestInput;
 
   Color _statusColor() => switch (status) {
         ConversationStatus.listening => AppTheme.listeningColor,
@@ -179,6 +211,21 @@ class _BottomBar extends StatelessWidget {
         ),
         child: Row(
           children: [
+            // ── Test input toggle (left) ──────────────────────────────────────
+            Tooltip(
+              message: showTestInput ? 'Hide test input' : 'Type to translate (testing)',
+              child: IconButton(
+                icon: Icon(
+                  showTestInput ? Icons.keyboard_hide : Icons.keyboard_outlined,
+                  size: 18,
+                  color: showTestInput
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.outlineVariant,
+                ),
+                onPressed: onToggleTestInput,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+              ),
+            ),
             // ── Status indicator (centre, takes flex space) ──────────────────
             Expanded(
               child: Center(
@@ -452,6 +499,89 @@ class _MessageLog extends StatelessWidget {
           ).animate(onPlay: (c) => c.repeat(reverse: true)).fade(
               begin: 0.5, end: 1.0, duration: 600.ms),
       ],
+    );
+  }
+}
+
+// ── Test input bar ─────────────────────────────────────────────────────────────
+
+class _TestInputBar extends StatelessWidget {
+  const _TestInputBar({
+    required this.controller,
+    required this.onSubmit,
+    required this.isSessionActive,
+  });
+  final TextEditingController controller;
+  final VoidCallback onSubmit;
+  final bool isSessionActive;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.25),
+        border: Border(
+          top: BorderSide(color: theme.colorScheme.primary.withValues(alpha: 0.3)),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(12, 6, 8, 6),
+      child: Row(
+        children: [
+          // "TEST" pill
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primary.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.4)),
+            ),
+            child: Text(
+              'TEST',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.8,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              enabled: isSessionActive,
+              decoration: InputDecoration(
+                hintText: 'Type text to translate…',
+                hintStyle: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.outline),
+                isDense: true,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(20),
+                  borderSide: BorderSide(
+                      color: theme.colorScheme.outline.withValues(alpha: 0.4)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(20),
+                  borderSide: BorderSide(
+                      color: theme.colorScheme.outline.withValues(alpha: 0.4)),
+                ),
+              ),
+              style: theme.textTheme.bodySmall,
+              textInputAction: TextInputAction.send,
+              onSubmitted: (_) => onSubmit(),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.send_rounded),
+            iconSize: 20,
+            color: theme.colorScheme.primary,
+            onPressed: isSessionActive ? onSubmit : null,
+          ),
+        ],
+      ),
     );
   }
 }
