@@ -107,6 +107,12 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
               scrollController: _scrollController,
               partialTranscript: state.partialTranscript,
               subtitlesEnabled: state.subtitlesEnabled,
+              hasAudio: ref
+                  .read(conversationControllerProvider.notifier)
+                  .hasAudio,
+              onReplayMessage: (id) => ref
+                  .read(conversationControllerProvider.notifier)
+                  .replayMessage(id),
             ),
           ),
         ],
@@ -370,12 +376,16 @@ class _MessageLog extends StatelessWidget {
     required this.scrollController,
     required this.partialTranscript,
     required this.subtitlesEnabled,
+    required this.hasAudio,
+    required this.onReplayMessage,
   });
 
   final List<TranslationMessage> messages;
   final ScrollController scrollController;
   final String partialTranscript;
   final bool subtitlesEnabled;
+  final bool Function(String id) hasAudio;
+  final void Function(String id) onReplayMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -425,7 +435,10 @@ class _MessageLog extends StatelessWidget {
       controller: scrollController,
       padding: const EdgeInsets.only(top: 12, bottom: 24),
       children: [
-        ...messages.map((msg) => TranslationBubble(message: msg)),
+        ...messages.map((msg) => TranslationBubble(
+              message: msg,
+              onReplay: hasAudio(msg.id) ? () => onReplayMessage(msg.id) : null,
+            )),
         if (partialTranscript.isNotEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),

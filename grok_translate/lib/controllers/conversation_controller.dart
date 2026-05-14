@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logger/logger.dart';
@@ -125,6 +126,10 @@ class ConversationController extends StateNotifier<ConversationState> {
   // translation cycle so the same phrase can be translated again next utterance.
   String? _lastTranslatedText;
 
+  // Replay cache: maps message ID → WAV bytes so the user can re-hear any
+  // past translation. Capped at 50 entries to keep memory bounded.
+  final _audioCache = <String, Uint8List>{};
+
   // Post-playback echo gate: after audio playback finishes, room reverberation
   // picked up by the mic can trigger a phantom second translation. This timer
   // blocks new transcriptions for a short window after playing=false so that
@@ -217,6 +222,7 @@ class ConversationController extends StateNotifier<ConversationState> {
     _postPlaybackTimer?.cancel();
     _transcriptAccumulator.clear();
     _lastTranslatedText = null;
+    _audioCache.clear();
     // Always reset speaker alternation so the next session opens with User1.
     _translateForward = true;
 
@@ -552,10 +558,38 @@ class ConversationController extends StateNotifier<ConversationState> {
       timestamp: DateTime.now(),
     );
 
+    // Associate any pending WAV (built in finishAndPlay) with this message so
+    // the user can replay it later. The pending reference is cleared here to
+    // avoid holding it in both the cache and the AudioPlayerService.
+    final wav = _player.pendingWav;
+    if (wav != null) {
+      _audioCache[msg.id] = wav;
+      _player.clearPendingWav();
+      // Keep the cache bounded — drop the oldest entry when over 50 messages.
+      if (_audioCache.length > 50) {
+        _audioCache.remove(_audioCache.keys.first);
+      }
+    }
+
     state = state.copyWith(
       messages: [...state.messages, msg],
       activeSpeaker: speaker,
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Replay API
+  // ---------------------------------------------------------------------------
+
+  /// Whether [messageId] has cached audio that can be replayed.
+  bool hasAudio(String messageId) => _audioCache.containsKey(messageId);
+
+  /// Replay the audio for [messageId]. No-op if audio is unavailable or a
+  /// translation is currently in flight.
+  Future<void> replayMessage(String messageId) async {
+    final wav = _audioCache[messageId];
+    if (wav == null || _translationInFlight) return;
+    await _player.playWav(wav);
   }
 
   /// Called once we have a full transcript — fires one translation request.

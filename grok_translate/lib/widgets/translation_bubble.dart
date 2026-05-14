@@ -13,8 +13,15 @@ import '../theme/app_theme.dart';
 /// and any trailing commentary is shown below in small italic muted text
 /// so it is clearly secondary.
 class TranslationBubble extends StatelessWidget {
-  const TranslationBubble({super.key, required this.message});
+  const TranslationBubble({
+    super.key,
+    required this.message,
+    this.onReplay,
+  });
   final TranslationMessage message;
+  /// Called when the user taps the replay button. Null = no audio available
+  /// (button is hidden).
+  final VoidCallback? onReplay;
 
   /// Returns the first sentence of [text] as the pure translation.
   static String _mainPart(String text) {
@@ -77,8 +84,6 @@ class TranslationBubble extends StatelessWidget {
                         color: borderColor, shape: BoxShape.circle),
                   ),
                   const SizedBox(width: 6),
-                  // Show the language pair so attribution is always clear,
-                  // regardless of whether speaker detection is accurate.
                   Text(
                     message.fromLanguage.isNotEmpty
                         ? '${message.fromLanguage} → ${message.toLanguage}'
@@ -92,6 +97,18 @@ class TranslationBubble extends StatelessWidget {
                     style: theme.textTheme.labelSmall
                         ?.copyWith(color: theme.colorScheme.outline),
                   ),
+                  // Replay button — only shown when audio is cached
+                  if (onReplay != null) ...[
+                    const SizedBox(width: 6),
+                    GestureDetector(
+                      onTap: onReplay,
+                      child: Icon(
+                        Icons.replay_rounded,
+                        size: 14,
+                        color: borderColor.withValues(alpha: 0.7),
+                      ),
+                    ),
+                  ],
                 ],
               ),
               const SizedBox(height: 6),

@@ -43,6 +43,13 @@ class AudioPlayerService {
     _pcmChunks.add(base64Decode(base64Chunk));
   }
 
+  // The WAV bytes for the most recently assembled response, held until the
+  // controller associates them with a message ID in _addMessage(). Cleared
+  // by the controller after association so the reference isn't duplicated.
+  Uint8List? _pendingWav;
+  Uint8List? get pendingWav => _pendingWav;
+  void clearPendingWav() => _pendingWav = null;
+
   /// Called when `response.audio.done` is received – play the full buffer.
   Future<void> finishAndPlay() async {
     if (!_isBuffering || _pcmChunks.isEmpty) {
@@ -65,14 +72,27 @@ class AudioPlayerService {
     }
     _pcmChunks.clear();
 
-    // Use 16 kHz to match the session audio output format configured in session.update
     final wav = GrokAudioService.pcm16ToWav(pcm, rate: GrokAudioService.sampleRate);
+    // Cache for replay before playing — the controller picks this up in _addMessage.
+    _pendingWav = wav;
 
     try {
       _playingController.add(true);
       await _playWav(wav);
     } catch (e) {
       _log.e('Playback error: $e');
+    } finally {
+      _playingController.add(false);
+    }
+  }
+
+  /// Play arbitrary WAV bytes — used for replay of a cached translation.
+  Future<void> playWav(Uint8List wav) async {
+    try {
+      _playingController.add(true);
+      await _playWav(wav);
+    } catch (e) {
+      _log.e('Replay error: $e');
     } finally {
       _playingController.add(false);
     }
