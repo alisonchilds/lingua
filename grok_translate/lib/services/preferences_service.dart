@@ -37,11 +37,17 @@ class PreferencesService {
   // Language config
   LanguageConfig getLanguageConfig() {
     final raw = _prefs.getString(_keyLanguageConfig);
-    if (raw == null) return const LanguageConfig();
+    // Default: user's own language on the left, auto-detect on the right.
+    final defaultCfg = LanguageConfig(
+      lang1Code: getMyLanguageCode(),
+      lang1Name: getMyLanguageName(),
+      autoDetect: true,
+    );
+    if (raw == null) return defaultCfg;
     try {
       return LanguageConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
     } catch (_) {
-      return const LanguageConfig();
+      return defaultCfg;
     }
   }
 
