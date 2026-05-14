@@ -312,11 +312,14 @@ If input contains profanity, output must contain equivalent profanity in $toLang
       'type': 'response.create',
       'response': {
         'modalities': ['audio', 'text'],
-        'instructions': 'TRANSLATOR ONLY — detect language of "$transcript" then:\n'
-            '• If it IS $myLanguage → speak its translation into the other language.\n'
-            '• If it is NOT $myLanguage → speak its translation into $myLanguage.\n'
-            'Output: translation only. NEVER add assistant phrases, follow-up questions, or any extra words. '
-            'A greeting translates to a greeting. Nothing more.',
+        'instructions': 'MUTE TRANSLATION MACHINE. Detect language of "$transcript".\n'
+            '• NOT $myLanguage → speak its $myLanguage translation. ONE translation. Nothing else.\n'
+            '• IS $myLanguage, partner language known → speak its translation. Nothing else.\n'
+            '• IS $myLanguage, partner language UNKNOWN → speak ONLY these exact words: "$transcript" '
+            '(repeat verbatim, no additions).\n'
+            'ABSOLUTE BAN: "Hello?", "Can you hear me?", "I\'m here", "What\'s on your mind?", '
+            '"How can I help", "I\'m ready", or any assistant phrase. '
+            'You are physically incapable of saying anything except a translation or the verbatim echo.',
       },
     });
   }
@@ -357,12 +360,14 @@ If input contains profanity, output must contain equivalent profanity in $toLang
       'type': 'response.create',
       'response': {
         'modalities': ['audio', 'text'],
-        'instructions': 'TRANSLATOR ONLY. '
-            'The previous speaker said: "$previousOriginalText". '
-            'Now translate "$transcript" from $myLanguage into the same language '
-            'the previous speaker was using. '
-            'Speak ONLY the translation. Zero extra words — no "You\'re welcome", '
-            'no "Glad I could help", no assistant phrases of any kind.',
+        'instructions': 'MUTE TRANSLATION MACHINE.\n'
+            'Previous speaker said: "$previousOriginalText"\n'
+            'Translate "$transcript" from $myLanguage into the language the previous speaker used.\n'
+            'If the previous text is also in $myLanguage (same language): '
+            'speak ONLY: "$transcript" — verbatim, nothing added.\n'
+            'ABSOLUTE BAN: any assistant phrase — "Hello?", "Can you hear me?", '
+            '"What\'s on your mind?", "I\'m here to help", "You\'re welcome", etc. '
+            'Output: translation or verbatim echo. Nothing else ever.',
       },
     });
   }

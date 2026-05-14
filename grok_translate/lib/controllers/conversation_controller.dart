@@ -658,15 +658,25 @@ class ConversationController extends StateNotifier<ConversationState> {
 
       if (state.detectedLang1 == null) {
         // ── Pre-detection: neither speaker's language is confirmed yet ───────
-        // Use _translateForward to alternate direction so consecutive utterances
-        // don't all get the same translation direction.
-        //   _translateForward=true  (odd  turns): biDir — model detects language
-        //   _translateForward=false (even turns): explicit FROM myLang, using the
-        //     previous transcript as context so the model knows the target language
-        fromLang = _translateForward ? 'auto' : myLang;
+        final isForwardTurn = _translateForward;
+        fromLang = isForwardTurn ? 'auto' : myLang;
         toLang = myLang;
-        speaker = _translateForward ? Speaker.user1 : Speaker.user2;
-        _translateForward = !_translateForward; // always alternate
+        speaker = isForwardTurn ? Speaker.user1 : Speaker.user2;
+        _translateForward = !_translateForward;
+
+        // Guard: if it's the forward turn (unknown input language) and no
+        // partner language has been configured, calling the API almost always
+        // produces assistant chatter rather than a translation — the model is
+        // asked to "translate to the other language" when there IS no other
+        // language. Skip the call entirely; the Listen circle stays visible
+        // and the user can set their partner's language via the right pill.
+        if (isForwardTurn && cfg.lang2Code == 'auto' &&
+            _previousOriginalText == null) {
+          _log.d('Skipping forward biDir: no partner language configured yet.');
+          _translationInFlight = false;
+          _lastTranslatedText = null;
+          return;
+        }
       } else {
         // ── Post-detection: use activeSpeaker set by _updateDetectedLanguage ─
         // activeSpeaker is Speaker.user1 when the current input matches
