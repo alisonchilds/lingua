@@ -100,7 +100,8 @@ class GrokApiService {
     required String fromLanguage,
     required String toLanguage,
     bool textOnly = false,
-    String? myLanguage,  // non-null triggers bidirectional auto-detect mode
+    String? myLanguage,             // non-null → biDir forward (detect & route)
+    String? previousOriginalText,  // non-null → biDir reverse (translate FROM myLanguage)
   }) {
     if (!textOnly) {
       _send({'type': 'response.cancel'});
@@ -113,9 +114,17 @@ class GrokApiService {
         transcript: transcript,
         toLanguage: toLanguage,
       );
+    } else if (previousOriginalText != null && myLanguage != null) {
+      // Pre-detection REVERSE direction: input is in myLanguage, target unknown.
+      // Use the previous original text as context so the model can infer the
+      // target language (e.g. "previous speaker said 'bonjour'" → translate to French).
+      _requestVoiceTranslationBiDirReverse(
+        transcript: transcript,
+        myLanguage: myLanguage,
+        previousOriginalText: previousOriginalText,
+      );
     } else if (myLanguage != null) {
-      // Pre-detection bidirectional mode: neither speaker's language is known.
-      // The model detects the language and routes: myLanguage→out, other→myLanguage.
+      // Pre-detection FORWARD direction: detect language and route.
       _requestVoiceTranslationBiDir(
         transcript: transcript,
         myLanguage: myLanguage,
@@ -308,6 +317,52 @@ If input contains profanity, output must contain equivalent profanity in $toLang
             '• If it is NOT $myLanguage → speak its translation into $myLanguage.\n'
             'Output: translation only. NEVER add assistant phrases, follow-up questions, or any extra words. '
             'A greeting translates to a greeting. Nothing more.',
+      },
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Translator mode — biDir REVERSE (pre-detection, user speaking their language)
+  // ---------------------------------------------------------------------------
+
+  /// Used when the user is speaking their own language and we don't yet know
+  /// the other language from the API. [previousOriginalText] gives the model
+  /// the previous speaker's original utterance as context — it can infer the
+  /// target language from that text (e.g. "bonjour" → French).
+  void _requestVoiceTranslationBiDirReverse({
+    required String transcript,
+    required String myLanguage,
+    required String previousOriginalText,
+  }) {
+    _pendingInjection = true;
+    try {
+      _send({
+        'type': 'conversation.item.create',
+        'item': {
+          'type': 'message',
+          'role': 'user',
+          'content': [
+            {
+              'type': 'input_text',
+              'text': 'TRANSLATE FROM $myLanguage: "$transcript"',
+            }
+          ],
+        },
+      });
+    } finally {
+      _pendingInjection = false;
+    }
+
+    _send({
+      'type': 'response.create',
+      'response': {
+        'modalities': ['audio', 'text'],
+        'instructions': 'TRANSLATOR ONLY. '
+            'The previous speaker said: "$previousOriginalText". '
+            'Now translate "$transcript" from $myLanguage into the same language '
+            'the previous speaker was using. '
+            'Speak ONLY the translation. Zero extra words — no "You\'re welcome", '
+            'no "Glad I could help", no assistant phrases of any kind.',
       },
     });
   }

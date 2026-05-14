@@ -106,7 +106,8 @@ class ConversationController extends StateNotifier<ConversationState> {
   String? _pendingFrom;
   String? _pendingTo;
   Speaker? _pendingSpeaker;
-  String? _pendingTranscript; // original spoken/typed text shown small in the bubble
+  String? _pendingTranscript;     // original spoken/typed text shown small in the bubble
+  String? _previousOriginalText; // transcript of the last completed translation (biDir context)
   bool _responseMessageAdded = false;
 
   // Translator mode: true while a response is in-flight (including audio
@@ -225,6 +226,7 @@ class ConversationController extends StateNotifier<ConversationState> {
     _transcriptAccumulator.clear();
     _lastTranslatedText = null;
     _audioCache.clear();
+    _previousOriginalText = null;
     // Always reset speaker alternation so the next session opens with User1.
     _translateForward = true;
 
@@ -655,16 +657,16 @@ class ConversationController extends StateNotifier<ConversationState> {
       final myLang = _prefs.getMyLanguageName();
 
       if (state.detectedLang1 == null) {
-        // ── Pre-detection: neither speaker's language is known yet ──────────
-        // We cannot know which person spoke first, so use a direction-neutral
-        // request: tell the model to detect the language and route correctly.
-        //   • Other person speaks first (e.g. French) → model translates to myLang ✓
-        //   • User speaks first (myLang) → model translates to their partner's language ✓
-        // fromLang/toLang are for the bubble label only; the model overrides.
-        fromLang = 'auto';
+        // ── Pre-detection: neither speaker's language is confirmed yet ───────
+        // Use _translateForward to alternate direction so consecutive utterances
+        // don't all get the same translation direction.
+        //   _translateForward=true  (odd  turns): biDir — model detects language
+        //   _translateForward=false (even turns): explicit FROM myLang, using the
+        //     previous transcript as context so the model knows the target language
+        fromLang = _translateForward ? 'auto' : myLang;
         toLang = myLang;
-        speaker = Speaker.user1; // best guess until detection arrives
-        // Do NOT flip _translateForward — direction isn't reliable until detection.
+        speaker = _translateForward ? Speaker.user1 : Speaker.user2;
+        _translateForward = !_translateForward; // always alternate
       } else {
         // ── Post-detection: use activeSpeaker set by _updateDetectedLanguage ─
         // activeSpeaker is Speaker.user1 when the current input matches
@@ -695,20 +697,31 @@ class ConversationController extends StateNotifier<ConversationState> {
     _pendingFrom = fromLang;
     _pendingTo = toLang;
     _pendingSpeaker = speaker;
-    _pendingTranscript = transcript; // stored so _addMessage can put it in the bubble
+    _pendingTranscript = transcript;
     _responseMessageAdded = false;
     _translationInFlight = true;
 
     final textOnly = state.appMode == AppMode.subtitles;
     _log.i('[${textOnly ? "subtitle" : "voice"} $fromLang → $toLang] "$transcript"');
 
+    // In pre-detection reverse direction (fromLang==myLang), pass the previous
+    // original text so the model knows what language to translate INTO.
+    final myLangStr = _prefs.getMyLanguageName();
+    final isPreDetectionReverse =
+        state.detectedLang1 == null && fromLang == myLangStr;
+
     _api.requestTranslation(
       transcript: transcript,
       fromLanguage: fromLang,
       toLanguage: toLang,
       textOnly: textOnly,
-      myLanguage: fromLang == 'auto' ? _prefs.getMyLanguageName() : null,
+      myLanguage: fromLang == 'auto' ? myLangStr : null,
+      previousOriginalText:
+          isPreDetectionReverse ? _previousOriginalText : null,
     );
+
+    // Save for the next call's context (used by the reverse-direction biDir)
+    _previousOriginalText = transcript;
   }
 
   /// Remove any prompt framing the model may echo back verbatim.
