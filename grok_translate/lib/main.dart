@@ -26,11 +26,11 @@ class GrokTranslateApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return MaterialApp.router(
-      title: 'Grok Translate',
+      title: 'Babelfish',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
-      darkTheme: AppTheme.dark,
-      themeMode: ThemeMode.system,
+      darkTheme: AppTheme.dark_,
+      themeMode: ThemeMode.light, // always light — the dark areas are custom-painted
       routerConfig: AppRouter.router,
     );
   }

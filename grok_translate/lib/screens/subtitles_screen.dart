@@ -64,7 +64,7 @@ class _SubtitlesScreenState extends ConsumerState<SubtitlesScreen> {
     });
 
     return Scaffold(
-      backgroundColor: theme.colorScheme.surface,
+      backgroundColor: AppTheme.cream,
       body: SafeArea(
         child: Column(
           children: [

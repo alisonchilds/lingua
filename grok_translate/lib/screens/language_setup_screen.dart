@@ -65,7 +65,7 @@ class _LanguageSetupScreenState extends ConsumerState<LanguageSetupScreen> {
           children: [
             Icon(Icons.translate, color: theme.colorScheme.primary),
             const SizedBox(width: 10),
-            const Text('Grok Translate'),
+            const Text('Babelfish'),
           ],
         ),
         actions: [
@@ -322,12 +322,12 @@ class _HeroSection extends StatelessWidget {
           child: const Icon(Icons.translate, color: Colors.white, size: 36),
         ),
         const SizedBox(height: 16),
-        Text('Grok Translate',
+        Text('Babelfish',
             style: theme.textTheme.headlineSmall
                 ?.copyWith(fontWeight: FontWeight.bold),
             textAlign: TextAlign.center),
         const SizedBox(height: 6),
-        Text('Real-time voice translation powered by Grok AI',
+        Text('Real-time voice translation powered by Grok',
             style: theme.textTheme.bodyMedium
                 ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             textAlign: TextAlign.center),

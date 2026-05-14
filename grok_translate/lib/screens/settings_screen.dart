@@ -281,7 +281,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const _InfoRow('App', 'Grok Translate v1.0.0'),
+                  const _InfoRow('App', 'Babelfish v1.0.0'),
                   const _InfoRow('API endpoint', 'wss://api.x.ai/v1/realtime'),
                   const _InfoRow('Audio format', 'PCM16 · 16 kHz · Mono'),
                   const _InfoRow('VAD mode', 'server_vad'),

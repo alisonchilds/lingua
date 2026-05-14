@@ -18,6 +18,9 @@ class ConversationScreen extends ConsumerStatefulWidget {
 
 class _ConversationScreenState extends ConsumerState<ConversationScreen> {
   final _scrollController = ScrollController();
+  int _currentTab = 0; // 0 = Translate, 1 = History, 2 = Discover
+
+  // Test input
   final _testInputController = TextEditingController();
   bool _showTestInput = false;
 
@@ -36,18 +39,11 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
     super.dispose();
   }
 
-  void _submitTestInput() {
-    final text = _testInputController.text.trim();
-    if (text.isEmpty) return;
-    ref.read(conversationControllerProvider.notifier).translateText(text);
-    _testInputController.clear();
-  }
-
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
       _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
+        duration: const Duration(milliseconds: 280),
         curve: Curves.easeOut,
       );
     }
@@ -58,10 +54,16 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
     if (mounted) context.go(AppRouter.pathSetup);
   }
 
+  void _submitTestInput() {
+    final text = _testInputController.text.trim();
+    if (text.isEmpty) return;
+    ref.read(conversationControllerProvider.notifier).translateText(text);
+    _testInputController.clear();
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(conversationControllerProvider);
-    final theme = Theme.of(context);
 
     ref.listen(conversationControllerProvider, (prev, next) {
       if ((prev?.messages.length ?? 0) < next.messages.length) {
@@ -70,435 +72,404 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
     });
 
     return Scaffold(
-      // ── Top bar ─────────────────────────────────────────────────────────────
-      appBar: AppBar(
-        leading: const SizedBox.shrink(),
-        title: _LanguageBadgeRow(state: state),
-        actions: [
-          // Connection dot
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            child: Tooltip(
-              message: state.isConnected ? 'Connected' : 'Disconnected',
-              child: Icon(
-                state.isConnected ? Icons.wifi : Icons.wifi_off,
-                color: state.isConnected ? Colors.green : theme.colorScheme.error,
-                size: 18,
-              ),
-            ),
-          ),
-          // CC toggle
-          IconButton(
-            icon: Icon(state.subtitlesEnabled
-                ? Icons.closed_caption
-                : Icons.closed_caption_disabled_outlined),
-            tooltip: state.subtitlesEnabled ? 'Hide subtitles' : 'Show subtitles',
-            onPressed: () => ref
-                .read(conversationControllerProvider.notifier)
-                .toggleSubtitles(),
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Settings',
-            onPressed: () => context.push(AppRouter.pathSettings),
-          ),
-        ],
+      backgroundColor: AppTheme.cream,
+      appBar: _BabelfishAppBar(
+        state: state,
+        onSettings: () => context.push(AppRouter.pathSettings),
       ),
-
-      // ── Full-screen message log ──────────────────────────────────────────────
-      body: Column(
+      body: IndexedStack(
+        index: _currentTab,
         children: [
-          if (state.status == ConversationStatus.error &&
-              state.errorMessage != null)
-            _ErrorBanner(message: state.errorMessage!),
-          Expanded(
-            child: _MessageLog(
-              messages: state.messages,
-              scrollController: _scrollController,
-              partialTranscript: state.partialTranscript,
-              subtitlesEnabled: state.subtitlesEnabled,
-              hasAudio: ref
-                  .read(conversationControllerProvider.notifier)
-                  .hasAudio,
-              onReplayMessage: (id) => ref
-                  .read(conversationControllerProvider.notifier)
-                  .replayMessage(id),
-            ),
-          ),
-        ],
-      ),
-
-      // ── Compact bottom status bar ────────────────────────────────────────────
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Test input panel — shown when toggled
-          if (_showTestInput)
-            _TestInputBar(
-              controller: _testInputController,
-              onSubmit: _submitTestInput,
-              isSessionActive: state.isSessionActive,
-            ),
-          _BottomBar(
-            status: state.status,
-            onEnd: _endSession,
+          // ── Tab 0: Translate ─────────────────────────────────────────────
+          _TranslateTab(
+            state: state,
+            scrollController: _scrollController,
             showTestInput: _showTestInput,
-            onToggleTestInput: () =>
-                setState(() => _showTestInput = !_showTestInput),
+            testInputController: _testInputController,
+            onToggleTest: () => setState(() => _showTestInput = !_showTestInput),
+            onSubmitTest: _submitTestInput,
+            onEnd: _endSession,
+            hasAudio: ref.read(conversationControllerProvider.notifier).hasAudio,
+            onReplay: (id) => ref
+                .read(conversationControllerProvider.notifier)
+                .replayMessage(id),
+          ),
+          // ── Tab 1: History ────────────────────────────────────────────────
+          const _PlaceholderTab(
+            icon: Icons.history_rounded,
+            label: 'History coming soon',
+          ),
+          // ── Tab 2: Discover ───────────────────────────────────────────────
+          const _PlaceholderTab(
+            icon: Icons.language_rounded,
+            label: 'Discover coming soon',
           ),
         ],
+      ),
+      bottomNavigationBar: _BabelfishBottomNav(
+        currentIndex: _currentTab,
+        onTap: (i) => setState(() => _currentTab = i),
       ),
     );
   }
 }
 
-// ── Bottom status bar ──────────────────────────────────────────────────────────
-// Replaces the old full-height ControlPanel. Shows a compact animated status
-// indicator in the centre and the End Session button on the right.
+// ── App bar ────────────────────────────────────────────────────────────────────
 
-class _BottomBar extends StatelessWidget {
-  const _BottomBar({
-    required this.status,
-    required this.onEnd,
-    required this.showTestInput,
-    required this.onToggleTestInput,
-  });
-  final ConversationStatus status;
-  final VoidCallback onEnd;
-  final bool showTestInput;
-  final VoidCallback onToggleTestInput;
+class _BabelfishAppBar extends StatelessWidget implements PreferredSizeWidget {
+  const _BabelfishAppBar({required this.state, required this.onSettings});
+  final ConversationState state;
+  final VoidCallback onSettings;
 
-  Color _statusColor() => switch (status) {
-        ConversationStatus.listening => AppTheme.listeningColor,
-        ConversationStatus.translating => AppTheme.translatingColor,
-        ConversationStatus.speaking => AppTheme.speakingColor,
-        ConversationStatus.error => AppTheme.errorColor,
-        _ => Colors.grey,
-      };
-
-  String _statusLabel() => switch (status) {
-        ConversationStatus.listening => 'Listening…',
-        ConversationStatus.translating => 'Translating…',
-        ConversationStatus.speaking => 'Speaking…',
-        ConversationStatus.error => 'Error',
-        _ => 'Idle',
-      };
-
-  IconData _statusIcon() => switch (status) {
-        ConversationStatus.listening => Icons.mic,
-        ConversationStatus.translating => Icons.translate,
-        ConversationStatus.speaking => Icons.volume_up,
-        ConversationStatus.error => Icons.error_outline,
-        _ => Icons.mic_off,
-      };
+  @override
+  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final color = _statusColor();
-    final isActive = status == ConversationStatus.listening ||
-        status == ConversationStatus.speaking;
-
-    return SafeArea(
-      child: Container(
-        height: 68,
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          border: Border(
-            top: BorderSide(
-                color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
-          ),
-        ),
+    return AppBar(
+      backgroundColor: AppTheme.dark,
+      leading: Padding(
+        padding: const EdgeInsets.only(left: 16),
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            // ── Test input toggle (left) ──────────────────────────────────────
-            Tooltip(
-              message: showTestInput ? 'Hide test input' : 'Type to translate (testing)',
-              child: IconButton(
-                icon: Icon(
-                  showTestInput ? Icons.keyboard_hide : Icons.keyboard_outlined,
-                  size: 18,
-                  color: showTestInput
-                      ? Theme.of(context).colorScheme.primary
-                      : Theme.of(context).colorScheme.outlineVariant,
-                ),
-                onPressed: onToggleTestInput,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+            // Fish logo
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: AppTheme.magenta,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Center(
+                child: Text('🐟', style: TextStyle(fontSize: 16)),
               ),
             ),
-            // ── Status indicator (centre, takes flex space) ──────────────────
-            Expanded(
-              child: Center(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Animated status dot
-                    _StatusDot(color: color, isActive: isActive),
-                    const SizedBox(width: 8),
-                    // Animated waveform bars (only when listening)
-                    if (status == ConversationStatus.listening)
-                      _MiniWaveform(color: color),
-                    // Mic/translate/speaker icon (other states)
-                    if (status != ConversationStatus.listening)
-                      Icon(
-                        _statusIcon(),
-                        color: color,
-                        size: 18,
-                      ),
-                    const SizedBox(width: 6),
-                    Text(
-                      _statusLabel(),
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: color,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            // ── End Session button (right) ───────────────────────────────────
-            Padding(
-              padding: const EdgeInsets.only(right: 16),
-              child: TextButton.icon(
-                onPressed: onEnd,
-                icon: Icon(Icons.stop_circle_outlined,
-                    size: 16, color: theme.colorScheme.error),
-                label: Text('End',
-                    style: TextStyle(
-                        color: theme.colorScheme.error, fontSize: 13)),
-                style: TextButton.styleFrom(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                ),
+            const SizedBox(width: 8),
+            const Text(
+              'Babelfish',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 18,
               ),
             ),
           ],
         ),
       ),
+      leadingWidth: 160,
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.settings_outlined, color: Colors.white),
+          onPressed: onSettings,
+        ),
+        const SizedBox(width: 4),
+      ],
     );
   }
 }
 
-class _StatusDot extends StatelessWidget {
-  const _StatusDot({required this.color, required this.isActive});
-  final Color color;
-  final bool isActive;
+// ── Translate tab ──────────────────────────────────────────────────────────────
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 8,
-      height: 8,
-      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-    )
-        .animate(onPlay: isActive ? (c) => c.repeat(reverse: true) : null)
-        .fade(
-          begin: isActive ? 0.4 : 1.0,
-          end: 1.0,
-          duration: 700.ms,
-        );
-  }
-}
+class _TranslateTab extends StatelessWidget {
+  const _TranslateTab({
+    required this.state,
+    required this.scrollController,
+    required this.showTestInput,
+    required this.testInputController,
+    required this.onToggleTest,
+    required this.onSubmitTest,
+    required this.onEnd,
+    required this.hasAudio,
+    required this.onReplay,
+  });
 
-class _MiniWaveform extends StatelessWidget {
-  const _MiniWaveform({required this.color});
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    const heights = [10.0, 16.0, 10.0, 18.0, 12.0];
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: List.generate(heights.length, (i) {
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 1.5),
-          child: Container(
-            width: 3,
-            height: 8,
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          )
-              .animate(onPlay: (c) => c.repeat(reverse: true))
-              .scaleY(
-                begin: 0.3,
-                end: heights[i] / 8,
-                duration: Duration(milliseconds: 380 + i * 70),
-                curve: Curves.easeInOut,
-              ),
-        );
-      }),
-    );
-  }
-}
-
-// ── Language badges in AppBar ──────────────────────────────────────────────────
-
-class _LanguageBadgeRow extends StatelessWidget {
-  const _LanguageBadgeRow({required this.state});
   final ConversationState state;
+  final ScrollController scrollController;
+  final bool showTestInput;
+  final TextEditingController testInputController;
+  final VoidCallback onToggleTest;
+  final VoidCallback onSubmitTest;
+  final VoidCallback onEnd;
+  final bool Function(String id) hasAudio;
+  final void Function(String id) onReplay;
 
   @override
   Widget build(BuildContext context) {
-    final cfg = state.languageConfig ?? const LanguageConfig();
-    final theme = Theme.of(context);
-
-    // Show detected name if available, otherwise configured name, otherwise 'Auto'
-    final lang1 = state.detectedLang1 ??
-        (cfg.autoDetect ? 'Auto' : cfg.lang1Name);
-    final lang1Flag =
-        state.detectedLang1Flag ?? (cfg.autoDetect ? '🌐' : '');
-    final detected1 = state.detectedLang1 != null;
-
-    final lang2 = state.detectedLang2 ??
-        (cfg.autoDetect ? 'Detecting…' : cfg.lang2Name);
-    final lang2Flag =
-        state.detectedLang2Flag ?? (cfg.autoDetect ? '🌐' : '');
-    final detected2 = state.detectedLang2 != null;
-
-    return Row(
-      mainAxisSize: MainAxisSize.min,
+    return Column(
       children: [
-        _LangChip(
-          name: lang1Flag.isNotEmpty ? '$lang1Flag $lang1' : lang1,
-          color: AppTheme.user1Color,
-          detected: detected1,
+        // ── Language pill selector ─────────────────────────────────────────
+        _LanguagePills(state: state),
+
+        // ── Error banner ───────────────────────────────────────────────────
+        if (state.status == ConversationStatus.error &&
+            state.errorMessage != null)
+          _ErrorBanner(message: state.errorMessage!),
+
+        // ── Message list or empty "Listen" state ───────────────────────────
+        Expanded(
+          child: state.messages.isEmpty && state.partialTranscript.isEmpty
+              ? _ListenEmptyState(status: state.status)
+              : _MessageList(
+                  messages: state.messages,
+                  scrollController: scrollController,
+                  partialTranscript: state.partialTranscript,
+                  hasAudio: hasAudio,
+                  onReplay: onReplay,
+                ),
         ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6),
-          child: Icon(Icons.sync_alt,
-              size: 14, color: theme.colorScheme.onSurfaceVariant),
-        ),
-        _LangChip(
-          name: lang2Flag.isNotEmpty ? '$lang2Flag $lang2' : lang2,
-          color: AppTheme.user2Color,
-          detected: detected2,
+
+        // ── Test input (hidden by default) ─────────────────────────────────
+        if (showTestInput)
+          _TestInputBar(
+            controller: testInputController,
+            onSubmit: onSubmitTest,
+            isActive: state.isSessionActive,
+          ),
+
+        // ── Status + control bar ───────────────────────────────────────────
+        _StatusBar(
+          status: state.status,
+          onEnd: onEnd,
+          onToggleTest: onToggleTest,
+          showTestInput: showTestInput,
         ),
       ],
     );
   }
 }
 
-class _LangChip extends StatelessWidget {
-  const _LangChip({
-    required this.name,
-    required this.color,
-    this.detected = false,
-  });
-  final String name;
-  final Color color;
-  final bool detected;
+// ── Language pills ─────────────────────────────────────────────────────────────
+
+class _LanguagePills extends StatelessWidget {
+  const _LanguagePills({required this.state});
+  final ConversationState state;
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 300),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: detected ? 0.18 : 0.1),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-            color: color.withValues(alpha: detected ? 0.7 : 0.4),
-            width: detected ? 1.5 : 1.0),
-      ),
-      child: Text(
-        name,
-        style: TextStyle(
-            color: color,
-            fontWeight: detected ? FontWeight.w700 : FontWeight.w600,
-            fontSize: 11),
+    final cfg = state.languageConfig ?? const LanguageConfig();
+    final lang1 = state.detectedLang1 ?? (cfg.autoDetect ? 'Auto' : cfg.lang1Name);
+    final lang2 = state.detectedLang2 ?? (cfg.autoDetect ? 'Auto' : cfg.lang2Name);
+
+    return Container(
+      color: AppTheme.dark,
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _Pill(label: lang1),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Icon(Icons.swap_horiz_rounded,
+                color: Colors.white.withValues(alpha: 0.7), size: 20),
+          ),
+          _Pill(label: lang2),
+        ],
       ),
     );
   }
 }
 
-// ── Full-screen message log ────────────────────────────────────────────────────
+class _Pill extends StatelessWidget {
+  const _Pill({required this.label});
+  final String label;
 
-class _MessageLog extends StatelessWidget {
-  const _MessageLog({
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2C2C2E),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+          fontSize: 14,
+        ),
+      ),
+    );
+  }
+}
+
+// ── Empty "Listen" state ───────────────────────────────────────────────────────
+
+class _ListenEmptyState extends StatelessWidget {
+  const _ListenEmptyState({required this.status});
+  final ConversationStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final isActive = status == ConversationStatus.listening ||
+        status == ConversationStatus.speaking;
+
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Large magenta circle with waveform
+          Container(
+            width: 120,
+            height: 120,
+            decoration: const BoxDecoration(
+              color: AppTheme.magenta,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.graphic_eq_rounded,
+              color: Colors.white,
+              size: 52,
+            ),
+          )
+              .animate(onPlay: isActive ? (c) => c.repeat(reverse: true) : null)
+              .scale(
+                begin: const Offset(1, 1),
+                end: const Offset(1.06, 1.06),
+                duration: 900.ms,
+                curve: Curves.easeInOut,
+              ),
+          const SizedBox(height: 20),
+          Text(
+            status == ConversationStatus.listening ? 'Listen' : 'Starting…',
+            style: const TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF1A1A1A),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Message list ───────────────────────────────────────────────────────────────
+
+class _MessageList extends StatelessWidget {
+  const _MessageList({
     required this.messages,
     required this.scrollController,
     required this.partialTranscript,
-    required this.subtitlesEnabled,
     required this.hasAudio,
-    required this.onReplayMessage,
+    required this.onReplay,
   });
 
   final List<TranslationMessage> messages;
   final ScrollController scrollController;
   final String partialTranscript;
-  final bool subtitlesEnabled;
   final bool Function(String id) hasAudio;
-  final void Function(String id) onReplayMessage;
+  final void Function(String id) onReplay;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    if (!subtitlesEnabled) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.closed_caption_disabled_outlined,
-                size: 48, color: theme.colorScheme.outlineVariant),
-            const SizedBox(height: 12),
-            Text('Subtitles are off',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: theme.colorScheme.outline)),
-          ],
-        ),
-      );
-    }
-
-    if (messages.isEmpty && partialTranscript.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.chat_bubble_outline,
-                size: 40, color: theme.colorScheme.outlineVariant),
-            const SizedBox(height: 12),
-            Text(
-              'Translations will appear here',
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: theme.colorScheme.outline),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Speak naturally — Grok translates automatically',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.outlineVariant),
-            ),
-          ],
-        ),
-      );
-    }
-
     return ListView(
       controller: scrollController,
-      padding: const EdgeInsets.only(top: 12, bottom: 24),
+      padding: const EdgeInsets.only(top: 12, bottom: 16),
       children: [
         ...messages.map((msg) => TranslationBubble(
               message: msg,
-              onReplay: hasAudio(msg.id) ? () => onReplayMessage(msg.id) : null,
+              onReplay: hasAudio(msg.id) ? () => onReplay(msg.id) : null,
             )),
         if (partialTranscript.isNotEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
             child: Text(
               partialTranscript,
-              style: theme.textTheme.bodyMedium?.copyWith(
+              style: TextStyle(
+                fontSize: 14,
                 fontStyle: FontStyle.italic,
-                color: theme.colorScheme.onSurfaceVariant,
+                color: Colors.black.withValues(alpha: 0.4),
               ),
             ),
           ).animate(onPlay: (c) => c.repeat(reverse: true)).fade(
-              begin: 0.5, end: 1.0, duration: 600.ms),
+              begin: 0.4, end: 1.0, duration: 600.ms),
       ],
+    );
+  }
+}
+
+// ── Status + control bar ───────────────────────────────────────────────────────
+
+class _StatusBar extends StatelessWidget {
+  const _StatusBar({
+    required this.status,
+    required this.onEnd,
+    required this.onToggleTest,
+    required this.showTestInput,
+  });
+
+  final ConversationStatus status;
+  final VoidCallback onEnd;
+  final VoidCallback onToggleTest;
+  final bool showTestInput;
+
+  String _statusLabel() => switch (status) {
+        ConversationStatus.listening => 'Listening...',
+        ConversationStatus.translating => 'Translating...',
+        ConversationStatus.speaking => 'Speaking...',
+        ConversationStatus.error => 'Error',
+        _ => 'Starting...',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: AppTheme.cream,
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+      child: Row(
+        children: [
+          // Test input toggle (small keyboard icon)
+          GestureDetector(
+            onTap: onToggleTest,
+            child: Icon(
+              showTestInput
+                  ? Icons.keyboard_hide_outlined
+                  : Icons.keyboard_outlined,
+              size: 20,
+              color: showTestInput
+                  ? AppTheme.magenta
+                  : const Color(0xFFAAAAAA),
+            ),
+          ),
+          // Status text (centre)
+          Expanded(
+            child: Center(
+              child: Text(
+                _statusLabel(),
+                style: TextStyle(
+                  color: status == ConversationStatus.error
+                      ? AppTheme.errorColor
+                      : AppTheme.magenta,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
+              ),
+            ),
+          ),
+          // End button
+          GestureDetector(
+            onTap: onEnd,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
+              decoration: BoxDecoration(
+                color: AppTheme.redEnd,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Text(
+                'End',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -509,67 +480,55 @@ class _TestInputBar extends StatelessWidget {
   const _TestInputBar({
     required this.controller,
     required this.onSubmit,
-    required this.isSessionActive,
+    required this.isActive,
   });
   final TextEditingController controller;
   final VoidCallback onSubmit;
-  final bool isSessionActive;
+  final bool isActive;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Container(
       decoration: BoxDecoration(
-        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.25),
+        color: AppTheme.magenta.withValues(alpha: 0.08),
         border: Border(
-          top: BorderSide(color: theme.colorScheme.primary.withValues(alpha: 0.3)),
+          top: BorderSide(color: AppTheme.magenta.withValues(alpha: 0.3)),
         ),
       ),
       padding: const EdgeInsets.fromLTRB(12, 6, 8, 6),
       child: Row(
         children: [
-          // "TEST" pill
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: theme.colorScheme.primary.withValues(alpha: 0.15),
+              color: AppTheme.magenta.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(4),
               border: Border.all(
-                  color: theme.colorScheme.primary.withValues(alpha: 0.4)),
+                  color: AppTheme.magenta.withValues(alpha: 0.4)),
             ),
-            child: Text(
-              'TEST',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.8,
-              ),
-            ),
+            child: const Text('TEST',
+                style: TextStyle(
+                    color: AppTheme.magenta,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 10,
+                    letterSpacing: 0.8)),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: TextField(
               controller: controller,
-              enabled: isSessionActive,
-              decoration: InputDecoration(
+              enabled: isActive,
+              decoration: const InputDecoration(
                 hintText: 'Type text to translate…',
-                hintStyle: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.outline),
                 isDense: true,
                 contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(20),
-                  borderSide: BorderSide(
-                      color: theme.colorScheme.outline.withValues(alpha: 0.4)),
-                ),
+                    borderRadius: BorderRadius.all(Radius.circular(20))),
                 enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(20),
-                  borderSide: BorderSide(
-                      color: theme.colorScheme.outline.withValues(alpha: 0.4)),
-                ),
+                    borderRadius: BorderRadius.all(Radius.circular(20))),
               ),
-              style: theme.textTheme.bodySmall,
+              style: const TextStyle(fontSize: 13),
               textInputAction: TextInputAction.send,
               onSubmitted: (_) => onSubmit(),
             ),
@@ -577,8 +536,8 @@ class _TestInputBar extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.send_rounded),
             iconSize: 20,
-            color: theme.colorScheme.primary,
-            onPressed: isSessionActive ? onSubmit : null,
+            color: AppTheme.magenta,
+            onPressed: isActive ? onSubmit : null,
           ),
         ],
       ),
@@ -594,23 +553,132 @@ class _ErrorBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      color: theme.colorScheme.errorContainer,
-      child: Row(
-        children: [
-          Icon(Icons.error_outline,
-              color: theme.colorScheme.onErrorContainer, size: 18),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              message,
-              style: TextStyle(
-                  color: theme.colorScheme.onErrorContainer, fontSize: 13),
-            ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: AppTheme.errorColor.withValues(alpha: 0.1),
+      child: Text(
+        message,
+        style: const TextStyle(color: AppTheme.errorColor, fontSize: 13),
+      ),
+    );
+  }
+}
+
+// ── Bottom navigation bar ──────────────────────────────────────────────────────
+
+class _BabelfishBottomNav extends StatelessWidget {
+  const _BabelfishBottomNav({
+    required this.currentIndex,
+    required this.onTap,
+  });
+  final int currentIndex;
+  final ValueChanged<int> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: AppTheme.dark,
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _NavItem(
+                icon: Icons.translate_rounded,
+                label: 'Translate',
+                selected: currentIndex == 0,
+                onTap: () => onTap(0),
+              ),
+              _NavItem(
+                icon: Icons.history_rounded,
+                label: 'History',
+                selected: currentIndex == 1,
+                onTap: () => onTap(1),
+              ),
+              _NavItem(
+                icon: Icons.language_rounded,
+                label: 'Discover',
+                selected: currentIndex == 2,
+                onTap: () => onTap(2),
+              ),
+            ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NavItem extends StatelessWidget {
+  const _NavItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? Colors.white : Colors.white.withValues(alpha: 0.4);
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (selected)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Icon(icon, color: Colors.white, size: 22),
+              )
+            else
+              Icon(icon, color: color, size: 22),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight:
+                    selected ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Placeholder tabs ───────────────────────────────────────────────────────────
+
+class _PlaceholderTab extends StatelessWidget {
+  const _PlaceholderTab({required this.icon, required this.label});
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 48, color: const Color(0xFFCCCCCC)),
+          const SizedBox(height: 12),
+          Text(label,
+              style: const TextStyle(color: Color(0xFFAAAAAA), fontSize: 16)),
         ],
       ),
     );
