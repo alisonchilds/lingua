@@ -171,7 +171,32 @@ export default {
       });
     }
 
-    // ── 5. Only accept WebSocket upgrades beyond this point ───────────────
+    // ── 5. Custom voices list (GET /custom-voices) ────────────────────────
+    // GET /custom-voices  →  GET https://api.x.ai/v1/custom-voices
+    // Lets the app show the user's cloned voice list in Settings.
+    if (url.pathname === "/custom-voices" && request.method === "GET") {
+      if (!isAllowedOrigin(origin)) {
+        return new Response("Forbidden: origin not allowed", { status: 403 });
+      }
+      if (!env.XAI_API_KEY) {
+        return new Response("Internal Server Error: proxy not configured", { status: 500 });
+      }
+      // Forward optional query params (limit, pagination_token)
+      const xaiUrl = `https://api.x.ai/v1/custom-voices${url.search}`;
+      const upstream = await fetch(xaiUrl, {
+        headers: { "Authorization": `Bearer ${env.XAI_API_KEY}` },
+      });
+      const body = await upstream.text();
+      return new Response(body, {
+        status: upstream.status,
+        headers: {
+          "Content-Type": "application/json",
+          ...securityHeaders(origin),
+        },
+      });
+    }
+
+    // ── 6. Only accept WebSocket upgrades beyond this point ───────────────
     const upgradeHeader = request.headers.get("Upgrade");
     const wsKey = request.headers.get("Sec-WebSocket-Key");
     const isWebSocket =
@@ -184,7 +209,7 @@ export default {
       );
     }
 
-    // ── 6. Origin validation (web browsers only) ──────────────────────────
+    // ── 7. Origin validation (web browsers only) ──────────────────────────
     // Native mobile clients send no Origin header — allow them through.
     // Browser clients must match ALLOWED_WEB_ORIGINS or known safe patterns.
     if (origin && !isAllowedOrigin(origin)) {
@@ -192,7 +217,7 @@ export default {
       return new Response("Forbidden: origin not allowed", { status: 403 });
     }
 
-    // ── 7. API key check ──────────────────────────────────────────────────
+    // ── 8. API key check ──────────────────────────────────────────────────
     if (!env.XAI_API_KEY) {
       console.error("[proxy] XAI_API_KEY secret is not set.");
       return new Response("Internal Server Error: proxy not configured", {
@@ -200,11 +225,11 @@ export default {
       });
     }
 
-    // ── 8. Upgrade the client connection ──────────────────────────────────
+    // ── 9. Upgrade the client connection ──────────────────────────────────
     const { 0: clientSocket, 1: serverSide } = new WebSocketPair();
     serverSide.accept();
 
-    // ── 9. Upgrade the upstream Grok connection (with the secret header) ───
+    // ── 10. Upgrade the upstream Grok connection (with the secret header) ──
     let grokSocket;
     try {
       const grokResp = await fetch(GROK_API_URL, {
@@ -235,7 +260,7 @@ export default {
       return new Response("Bad Gateway", { status: 502 });
     }
 
-    // ── 10. Bidirectional pipe ─────────────────────────────────────────────
+    // ── 11. Bidirectional pipe ─────────────────────────────────────────────
 
     // Client → Grok
     serverSide.addEventListener("message", (evt) => {
@@ -274,7 +299,7 @@ export default {
       console.error("[proxy] Grok socket error:", err);
     });
 
-    // ── 11. Return the 101 Switching Protocols response to the client ──────
+    // ── 12. Return the 101 Switching Protocols response to the client ──────
     return new Response(null, {
       status: 101,
       webSocket: clientSocket,

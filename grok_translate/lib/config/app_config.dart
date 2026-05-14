@@ -40,4 +40,7 @@ class AppConfig {
 
   /// HTTPS URL for the chat-completions translation endpoint (subtitles mode).
   static const String translateProxyHttp = 'https://$proxyHost/translate';
+
+  /// HTTPS URL for listing the user's custom (cloned) voices.
+  static const String customVoicesProxyHttp = 'https://$proxyHost/custom-voices';
 }
