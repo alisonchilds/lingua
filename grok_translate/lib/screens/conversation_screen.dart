@@ -19,7 +19,8 @@ class ConversationScreen extends ConsumerStatefulWidget {
 
 class _ConversationScreenState extends ConsumerState<ConversationScreen> {
   final _scrollController = ScrollController();
-  int _currentTab = 0; // 0 = Translate, 1 = History, 2 = Discover
+  // 0 = Translate, 1 = Subtitles, 2 = History, 3 = Discover
+  int _currentTab = 0;
 
   // Test input
   final _testInputController = TextEditingController();
@@ -54,7 +55,22 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
 
   Future<void> _endSession() async {
     await ref.read(conversationControllerProvider.notifier).endSession();
-    // Return to the idle Listen circle — user taps it again to restart.
+    // Return to the idle circle — user taps it again to restart.
+  }
+
+  /// Called when the user taps a bottom-nav tab.
+  /// Ends any active session and switches the app mode to match the new tab.
+  Future<void> _onTabChanged(int index) async {
+    if (index == _currentTab) return;
+    final notifier = ref.read(conversationControllerProvider.notifier);
+    final isActive =
+        ref.read(conversationControllerProvider).isSessionActive;
+    if (isActive) await notifier.endSession();
+
+    if (index == 0) notifier.setAppMode(AppMode.translator);
+    if (index == 1) notifier.setAppMode(AppMode.subtitles);
+
+    setState(() => _currentTab = index);
   }
 
   void _submitTestInput() {
@@ -98,12 +114,19 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
                 .read(conversationControllerProvider.notifier)
                 .replayMessage(id),
           ),
-          // ── Tab 1: History ────────────────────────────────────────────────
+          // ── Tab 1: Subtitles ──────────────────────────────────────────────
+          _SubtitlesTab(
+            state: state,
+            scrollController: _scrollController,
+            onStart: _startSession,
+            onEnd: _endSession,
+          ),
+          // ── Tab 2: History ────────────────────────────────────────────────
           const _PlaceholderTab(
             icon: Icons.history_rounded,
             label: 'History coming soon',
           ),
-          // ── Tab 2: Discover ───────────────────────────────────────────────
+          // ── Tab 3: Discover ───────────────────────────────────────────────
           const _PlaceholderTab(
             icon: Icons.language_rounded,
             label: 'Discover coming soon',
@@ -112,7 +135,7 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
       ),
       bottomNavigationBar: _BabelfishBottomNav(
         currentIndex: _currentTab,
-        onTap: (i) => setState(() => _currentTab = i),
+        onTap: _onTabChanged,
       ),
     );
   }
@@ -807,16 +830,22 @@ class _BabelfishBottomNav extends StatelessWidget {
                 onTap: () => onTap(0),
               ),
               _NavItem(
-                icon: Icons.history_rounded,
-                label: 'History',
+                icon: Icons.closed_caption_outlined,
+                label: 'Subtitles',
                 selected: currentIndex == 1,
                 onTap: () => onTap(1),
               ),
               _NavItem(
-                icon: Icons.language_rounded,
-                label: 'Discover',
+                icon: Icons.history_rounded,
+                label: 'History',
                 selected: currentIndex == 2,
                 onTap: () => onTap(2),
+              ),
+              _NavItem(
+                icon: Icons.language_rounded,
+                label: 'Discover',
+                selected: currentIndex == 3,
+                onTap: () => onTap(3),
               ),
             ],
           ),
@@ -873,6 +902,160 @@ class _NavItem extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ── Subtitles tab ──────────────────────────────────────────────────────────────
+
+class _SubtitlesTab extends StatelessWidget {
+  const _SubtitlesTab({
+    required this.state,
+    required this.scrollController,
+    required this.onStart,
+    required this.onEnd,
+  });
+
+  final ConversationState state;
+  final ScrollController scrollController;
+  final VoidCallback onStart;
+  final VoidCallback onEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isListening = state.status == ConversationStatus.listening;
+
+    return Column(
+      children: [
+        // ── Content ──────────────────────────────────────────────────────────
+        Expanded(
+          child: state.messages.isEmpty && state.partialTranscript.isEmpty
+              ? _ListenEmptyState(
+                  status: state.status,
+                  isSessionActive: state.isSessionActive,
+                  onStart: onStart,
+                )
+              : ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
+                  children: [
+                    ...state.messages.map((msg) => Padding(
+                          padding: const EdgeInsets.only(bottom: 28),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (msg.fromLanguage.isNotEmpty &&
+                                  !msg.fromLanguage
+                                      .toLowerCase()
+                                      .contains('detected') &&
+                                  msg.fromLanguage != 'auto-detect') ...[
+                                Text(
+                                  'From ${msg.fromLanguage}',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: const Color(0xFF999999),
+                                    letterSpacing: 0.3,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                              ],
+                              // Original text (small italic)
+                              if (msg.originalText.isNotEmpty) ...[
+                                Text(
+                                  msg.originalText,
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    color: Color(0xFF888888),
+                                    fontStyle: FontStyle.italic,
+                                    height: 1.4,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                              ],
+                              // Translation (large)
+                              Text(
+                                msg.translatedText,
+                                style: const TextStyle(
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.w300,
+                                  height: 1.3,
+                                  color: Color(0xFF1A1A1A),
+                                ),
+                              ),
+                            ],
+                          ),
+                        )),
+                    // Streaming partial
+                    if (state.partialTranscript.isNotEmpty)
+                      Text(
+                        state.partialTranscript,
+                        style: TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.w300,
+                          height: 1.3,
+                          color: const Color(0xFF1A1A1A).withValues(alpha: 0.35),
+                          fontStyle: FontStyle.italic,
+                        ),
+                      )
+                          .animate(onPlay: (c) => c.repeat(reverse: true))
+                          .fade(begin: 0.4, end: 1.0, duration: 700.ms),
+                  ],
+                ),
+        ),
+
+        // ── Slim bottom bar ───────────────────────────────────────────────────
+        if (state.isSessionActive)
+          Container(
+            color: AppTheme.cream,
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 12),
+            child: Row(
+              children: [
+                // Listening indicator dot
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: isListening
+                        ? AppTheme.magenta
+                        : const Color(0xFFCCCCCC),
+                    shape: BoxShape.circle,
+                  ),
+                )
+                    .animate(
+                        onPlay:
+                            isListening ? (c) => c.repeat(reverse: true) : null)
+                    .fade(begin: 0.3, end: 1.0, duration: 600.ms),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    isListening ? 'Listening for speech…' : 'Translating…',
+                    style: TextStyle(
+                      color: AppTheme.magenta,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                GestureDetector(
+                  onTap: onEnd,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 18, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: AppTheme.redEnd,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: const Text('End',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }
