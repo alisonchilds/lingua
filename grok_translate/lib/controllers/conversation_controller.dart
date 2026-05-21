@@ -340,7 +340,7 @@ class ConversationController extends StateNotifier<ConversationState> {
           _transcriptDebounce = Timer(
             Duration(
                 milliseconds:
-                    state.appMode == AppMode.subtitles ? 300 : 400),
+                    state.appMode == AppMode.subtitles ? 200 : 300),
             () {
               var full = _transcriptAccumulator.toString().trim();
               _transcriptAccumulator.clear();
@@ -395,12 +395,12 @@ class ConversationController extends StateNotifier<ConversationState> {
         }
 
         _transcriptDebounce?.cancel();
-        // Subtitles phrases are short → 600 ms is enough.
-        // Translator allows 1 200 ms so multi-commit phrases can accumulate.
+        // Subtitles: 500 ms. Translator: 700 ms (was 1200 ms — tightened
+        // now that the architecture no longer needs the full accumulation window).
         _transcriptDebounce = Timer(
           Duration(
               milliseconds:
-                  state.appMode == AppMode.subtitles ? 600 : 1200),
+                  state.appMode == AppMode.subtitles ? 500 : 700),
           () {
             var full = _transcriptAccumulator.toString().trim();
             _transcriptAccumulator.clear();
@@ -664,19 +664,11 @@ class ConversationController extends StateNotifier<ConversationState> {
         speaker = isForwardTurn ? Speaker.user1 : Speaker.user2;
         _translateForward = !_translateForward;
 
-        // Guard: if it's the forward turn (unknown input language) and no
-        // partner language has been configured, calling the API almost always
-        // produces assistant chatter rather than a translation — the model is
-        // asked to "translate to the other language" when there IS no other
-        // language. Skip the call entirely; the Listen circle stays visible
-        // and the user can set their partner's language via the right pill.
-        if (isForwardTurn && cfg.lang2Code == 'auto' &&
-            _previousOriginalText == null) {
-          _log.d('Skipping forward biDir: no partner language configured yet.');
-          _translationInFlight = false;
-          _lastTranslatedText = null;
-          return;
-        }
+        // Previously skipped the first forward-biDir turn to avoid assistant
+        // mode. With the new architecture (transcript in response.create
+        // instructions, not conversation.item.create), this skip is no longer
+        // needed — the model receives a command, not a chat message, so it
+        // cannot drift into assistant mode regardless of input language.
       } else {
         // ── Post-detection: use activeSpeaker set by _updateDetectedLanguage ─
         // activeSpeaker is Speaker.user1 when the current input matches

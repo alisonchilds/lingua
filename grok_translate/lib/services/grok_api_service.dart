@@ -207,75 +207,35 @@ If input contains profanity, output must contain equivalent profanity in $toLang
   }
 
   // ---------------------------------------------------------------------------
-  // Translator mode — voice output, bidirectional, no LANG: prefix needed
+  // Translator mode — voice output
   // ---------------------------------------------------------------------------
+  //
+  // ── Why no conversation.item.create ──────────────────────────────────────
+  // Previous approach: inject transcript as {role:"user", content:"TRANSLATE: X"}
+  // Problem: voice-agent models are trained to RESPOND to user messages.
+  // No matter how strict the system prompt, a "user message" triggers the
+  // model's helpfulness instinct — "Hello" becomes "Can you hear me? How can
+  // I help?" because the model wants to reply to a chat turn.
+  //
+  // Fix: embed the transcript inside response.create `instructions` only.
+  // The model now receives a COMMAND to execute, not a message to react to.
+  // This eliminates assistant-mode responses at the architectural level.
 
   void _requestVoiceTranslation({
     required String transcript,
     required String fromLanguage,
     required String toLanguage,
   }) {
-    // One concrete example shows the model the expected output format:
-    // input text on the left, pure translation on the right, nothing else.
-    // 'Bonjour' → 'Hello' (or reversed) is universal and unambiguous.
-    final exUser = 'TRANSLATE TO $toLanguage: "Bonjour"';
-    final exReply = _helloInLanguage(toLanguage);
-    _injectExamples([(user: exUser, reply: exReply)]);
-
-    _pendingInjection = true;
-    try {
-      _send({
-        'type': 'conversation.item.create',
-        'item': {
-          'type': 'message',
-          'role': 'user',
-          'content': [
-            {
-              'type': 'input_text',
-              // Simple, direct format — no pipe notation, no "INPUT:" label.
-              // The model sees a plain instruction it cannot misread as a chat.
-              'text': 'TRANSLATE TO $toLanguage: "$transcript"',
-            }
-          ],
-        },
-      });
-    } finally {
-      _pendingInjection = false;
-    }
-
     _send({
       'type': 'response.create',
       'response': {
         'modalities': ['audio', 'text'],
-        'instructions': 'TRANSLATOR ONLY. '
-            'Speak the $toLanguage translation of "$transcript". '
-            'Output: the translation only. '
-            'NEVER add: "How can I help?", follow-up questions, assistant phrases, or any extra words. '
-            'Greetings translate to greetings — never to offers of help.',
+        'instructions':
+            'Speak the $toLanguage translation of: "$transcript"\n'
+            'Say only the translation. No other words.',
       },
     });
   }
-
-  /// Returns "Hello" in the given target language for the per-turn example.
-  static String _helloInLanguage(String lang) => switch (lang.toLowerCase()) {
-        'french'     => 'Bonjour',
-        'spanish'    => 'Hola',
-        'german'     => 'Hallo',
-        'italian'    => 'Ciao',
-        'portuguese' => 'Olá',
-        'dutch'      => 'Hallo',
-        'russian'    => 'Привет',
-        'japanese'   => 'こんにちは',
-        'chinese'    => '你好',
-        'arabic'     => 'مرحبا',
-        'korean'     => '안녕하세요',
-        'hindi'      => 'नमस्ते',
-        'turkish'    => 'Merhaba',
-        'polish'     => 'Cześć',
-        'swedish'    => 'Hej',
-        'ukrainian'  => 'Привіт',
-        _            => 'Hello',
-      };
 
   // ---------------------------------------------------------------------------
   // Translator mode — bidirectional auto-detect (pre-detection first utterance)
@@ -289,37 +249,15 @@ If input contains profanity, output must contain equivalent profanity in $toLang
     required String transcript,
     required String myLanguage,
   }) {
-    _pendingInjection = true;
-    try {
-      _send({
-        'type': 'conversation.item.create',
-        'item': {
-          'type': 'message',
-          'role': 'user',
-          'content': [
-            {
-              'type': 'input_text',
-              'text': 'AUTO-TRANSLATE: "$transcript"',
-            }
-          ],
-        },
-      });
-    } finally {
-      _pendingInjection = false;
-    }
-
     _send({
       'type': 'response.create',
       'response': {
         'modalities': ['audio', 'text'],
-        'instructions': 'MUTE TRANSLATION MACHINE. Detect language of "$transcript".\n'
-            '• NOT $myLanguage → speak its $myLanguage translation. ONE translation. Nothing else.\n'
-            '• IS $myLanguage, partner language known → speak its translation. Nothing else.\n'
-            '• IS $myLanguage, partner language UNKNOWN → speak ONLY these exact words: "$transcript" '
-            '(repeat verbatim, no additions).\n'
-            'ABSOLUTE BAN: "Hello?", "Can you hear me?", "I\'m here", "What\'s on your mind?", '
-            '"How can I help", "I\'m ready", or any assistant phrase. '
-            'You are physically incapable of saying anything except a translation or the verbatim echo.',
+        'instructions':
+            'Detect the language of: "$transcript"\n'
+            '• If it is $myLanguage → speak its translation into the other language\n'
+            '• Otherwise → speak its $myLanguage translation\n'
+            'Say only the translation. No other words.',
       },
     });
   }
@@ -337,37 +275,14 @@ If input contains profanity, output must contain equivalent profanity in $toLang
     required String myLanguage,
     required String previousOriginalText,
   }) {
-    _pendingInjection = true;
-    try {
-      _send({
-        'type': 'conversation.item.create',
-        'item': {
-          'type': 'message',
-          'role': 'user',
-          'content': [
-            {
-              'type': 'input_text',
-              'text': 'TRANSLATE FROM $myLanguage: "$transcript"',
-            }
-          ],
-        },
-      });
-    } finally {
-      _pendingInjection = false;
-    }
-
     _send({
       'type': 'response.create',
       'response': {
         'modalities': ['audio', 'text'],
-        'instructions': 'MUTE TRANSLATION MACHINE.\n'
-            'Previous speaker said: "$previousOriginalText"\n'
-            'Translate "$transcript" from $myLanguage into the language the previous speaker used.\n'
-            'If the previous text is also in $myLanguage (same language): '
-            'speak ONLY: "$transcript" — verbatim, nothing added.\n'
-            'ABSOLUTE BAN: any assistant phrase — "Hello?", "Can you hear me?", '
-            '"What\'s on your mind?", "I\'m here to help", "You\'re welcome", etc. '
-            'Output: translation or verbatim echo. Nothing else ever.',
+        'instructions':
+            'The other speaker previously said: "$previousOriginalText"\n'
+            'Speak the translation of: "$transcript" (from $myLanguage into their language)\n'
+            'Say only the translation. No other words.',
       },
     });
   }
