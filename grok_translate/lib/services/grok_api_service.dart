@@ -197,6 +197,7 @@ Input: "$transcript"''',
         'instructions': strict
             ? _speakTranslationOnly(
                 transcript: transcript,
+                fromLanguage: 'auto',
                 toLanguage: 'the other language (not $myLanguage)',
                 strict: true,
               )
@@ -223,6 +224,7 @@ Input: "$transcript"''',
         'instructions': strict
             ? _speakTranslationOnly(
                 transcript: transcript,
+                fromLanguage: myLanguage,
                 toLanguage: targetHint,
                 strict: true,
               )
