@@ -129,6 +129,8 @@ class ConversationController extends StateNotifier<ConversationState> {
   // that slip through the accumulator dedup. Cleared after each completed
   // translation cycle so the same phrase can be translated again next utterance.
   String? _lastTranslatedText;
+  String? _utteranceLanguageName;
+  int _assistantRetryCount = 0;
 
   // Replay cache: maps message ID → WAV bytes so the user can re-hear any
   // past translation. Capped at 50 entries to keep memory bounded.
@@ -753,6 +755,28 @@ class ConversationController extends StateNotifier<ConversationState> {
 
     _utteranceLanguageName = null;
     _previousOriginalText = transcript;
+  }
+
+
+  void _reissuePendingTranslation({required bool strict}) {
+    final transcript = _pendingTranscript;
+    if (transcript == null) return;
+    _translationInFlight = true;
+    _api.requestTranslation(
+      transcript: transcript,
+      fromLanguage: _pendingFrom ?? _hubLanguage,
+      toLanguage: _pendingTo ?? _hubLanguage,
+      textOnly: state.appMode == AppMode.subtitles,
+      strict: strict,
+    );
+  }
+
+  SupportedLanguage _languageFromIso(String isoCode) {
+    final code = isoCode.toLowerCase().split('-').first;
+    return kSupportedLanguages.firstWhere(
+      (l) => l.code == code,
+      orElse: () => SupportedLanguage(code, _capitalize(code), '🌐'),
+    );
   }
 
   /// Remove any prompt framing the model may echo back verbatim.
