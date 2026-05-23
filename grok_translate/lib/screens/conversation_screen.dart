@@ -590,6 +590,7 @@ class _MessageList extends StatelessWidget {
     required this.messages,
     required this.scrollController,
     required this.partialTranscript,
+    required this.showTranslationText,
     required this.hasAudio,
     required this.onReplay,
   });
@@ -597,6 +598,7 @@ class _MessageList extends StatelessWidget {
   final List<TranslationMessage> messages;
   final ScrollController scrollController;
   final String partialTranscript;
+  final bool showTranslationText;
   final bool Function(String id) hasAudio;
   final void Function(String id) onReplay;
 

@@ -290,22 +290,40 @@ class ConversationController extends StateNotifier<ConversationState> {
     await _prefs.setSubtitlesEnabled(newVal);
   }
 
-  /// Update VAD threshold (persisted).
   Future<void> setVadThreshold(double threshold) async {
     state = state.copyWith(vadThreshold: threshold);
     await _prefs.setVadSettings(VadSettings(
       threshold: threshold,
       silenceDurationMs: state.vadSilenceDurationMs,
     ));
+    _applySessionSettingsIfActive();
   }
 
-  /// Update VAD silence duration (persisted).
   Future<void> setVadSilenceDuration(int ms) async {
     state = state.copyWith(vadSilenceDurationMs: ms);
     await _prefs.setVadSettings(VadSettings(
       threshold: state.vadThreshold,
       silenceDurationMs: ms,
     ));
+    _applySessionSettingsIfActive();
+  }
+
+  Future<void> setVoiceId(String voiceId) async {
+    await _prefs.setVoiceId(voiceId);
+    _applySessionSettingsIfActive(voiceId: voiceId);
+  }
+
+  void _applySessionSettingsIfActive({String? voiceId}) {
+    if (!state.isSessionActive) return;
+    final langCfg = state.languageConfig ?? const LanguageConfig();
+    _api.updateSession(
+      languageConfig: langCfg,
+      vadSettings: VadSettings(
+        threshold: state.vadThreshold,
+        silenceDurationMs: state.vadSilenceDurationMs,
+      ),
+      voiceId: voiceId ?? _prefs.getVoiceId(),
+    );
   }
 
   // ---------------------------------------------------------------------------
