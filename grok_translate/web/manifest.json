@@ -1,6 +1,6 @@
 {
-    "name": "Grok Translate",
-    "short_name": "Grok Translate",
+    "name": "Babelfish",
+    "short_name": "Babelfish",
     "start_url": "/",
     "display": "standalone",
     "background_color": "#1A1A2E",

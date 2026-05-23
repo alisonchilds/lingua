@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -216,7 +217,7 @@ class _TranslateTab extends StatelessWidget {
   final ScrollController scrollController;
   final bool showTestInput;
   final TextEditingController testInputController;
-  final VoidCallback onToggleTest;
+  final VoidCallback? onToggleTest;
   final VoidCallback onSubmitTest;
   final VoidCallback onStart;
   final VoidCallback onEnd;
@@ -235,9 +236,12 @@ class _TranslateTab extends StatelessWidget {
             state.errorMessage != null)
           _ErrorBanner(message: state.errorMessage!),
 
-        // ── Message list or empty "Listen" state ───────────────────────────
+        if (state.isSessionActive && !state.isConnected)
+          const _ReconnectBanner(),
+
         Expanded(
-          child: state.messages.isEmpty && state.partialTranscript.isEmpty
+          child: state.messages.isEmpty &&
+                  (!_showLiveText(state) || state.partialTranscript.isEmpty)
               ? _ListenEmptyState(
                   status: state.status,
                   isSessionActive: state.isSessionActive,
@@ -246,31 +250,33 @@ class _TranslateTab extends StatelessWidget {
               : _MessageList(
                   messages: state.messages,
                   scrollController: scrollController,
-                  partialTranscript: state.partialTranscript,
+                  partialTranscript:
+                      _showLiveText(state) ? state.partialTranscript : '',
+                  showTranslationText: _showLiveText(state),
                   hasAudio: hasAudio,
                   onReplay: onReplay,
                 ),
         ),
 
-        // ── Test input (hidden by default) ─────────────────────────────────
-        if (showTestInput)
+        if (kDebugMode && showTestInput)
           _TestInputBar(
             controller: testInputController,
             onSubmit: onSubmitTest,
             isActive: state.isSessionActive,
           ),
 
-        // ── Status + control bar (hidden until session starts) ────────────
         _StatusBar(
           status: state.status,
           isSessionActive: state.isSessionActive,
           onEnd: onEnd,
-          onToggleTest: onToggleTest,
+          onToggleTest: kDebugMode ? onToggleTest : null,
           showTestInput: showTestInput,
         ),
       ],
     );
   }
+
+  static bool _showLiveText(ConversationState state) => state.subtitlesEnabled;
 }
 
 // ── Language pills ─────────────────────────────────────────────────────────────
@@ -604,6 +610,7 @@ class _MessageList extends StatelessWidget {
       children: [
         ...messages.map((msg) => TranslationBubble(
               message: msg,
+              showTranslationText: showTranslationText,
               onReplay: hasAudio(msg.id) ? () => onReplay(msg.id) : null,
             )),
         if (partialTranscript.isNotEmpty)
@@ -638,7 +645,7 @@ class _StatusBar extends StatelessWidget {
   final ConversationStatus status;
   final bool isSessionActive;
   final VoidCallback onEnd;
-  final VoidCallback onToggleTest;
+  final VoidCallback? onToggleTest;
   final bool showTestInput;
 
   String _statusLabel() => switch (status) {
@@ -659,19 +666,21 @@ class _StatusBar extends StatelessWidget {
       child: Row(
         children: [
           // Test input toggle (small keyboard icon)
-          GestureDetector(
-            onTap: onToggleTest,
-            child: Icon(
-              showTestInput
-                  ? Icons.keyboard_hide_outlined
-                  : Icons.keyboard_outlined,
-              size: 20,
-              color: showTestInput
-                  ? AppTheme.magenta
-                  : const Color(0xFFAAAAAA),
-            ),
-          ),
-          // Status text (centre)
+          if (onToggleTest != null)
+            GestureDetector(
+              onTap: onToggleTest,
+              child: Icon(
+                showTestInput
+                    ? Icons.keyboard_hide_outlined
+                    : Icons.keyboard_outlined,
+                size: 20,
+                color: showTestInput
+                    ? AppTheme.magenta
+                    : const Color(0xFFAAAAAA),
+              ),
+            )
+          else
+            const SizedBox(width: 20),
           Expanded(
             child: Center(
               child: Text(
@@ -803,6 +812,38 @@ class _ErrorBanner extends StatelessWidget {
   }
 }
 
+class _ReconnectBanner extends StatelessWidget {
+  const _ReconnectBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: AppTheme.magenta.withValues(alpha: 0.12),
+      child: const Row(
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: AppTheme.magenta,
+            ),
+          ),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Reconnecting to the translation server…',
+              style: TextStyle(color: AppTheme.magenta, fontSize: 13),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ── Bottom navigation bar ──────────────────────────────────────────────────────
 
 class _BabelfishBottomNav extends StatelessWidget {
@@ -928,7 +969,8 @@ class _SubtitlesTab extends StatelessWidget {
 
     return Column(
       children: [
-        // ── Content ──────────────────────────────────────────────────────────
+        if (state.isSessionActive && !state.isConnected)
+          const _ReconnectBanner(),
         Expanded(
           child: state.messages.isEmpty && state.partialTranscript.isEmpty
               ? _ListenEmptyState(

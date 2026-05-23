@@ -14,10 +14,12 @@ class TranslationBubble extends StatelessWidget {
   const TranslationBubble({
     super.key,
     required this.message,
+    this.showTranslationText = true,
     this.onReplay,
   });
 
   final TranslationMessage message;
+  final bool showTranslationText;
   final VoidCallback? onReplay;
 
   @override
@@ -82,28 +84,34 @@ class TranslationBubble extends StatelessWidget {
             ),
             const SizedBox(height: 6),
 
-            // ── Original text (small italic grey) ─────────────────────────
-            if (message.originalText.isNotEmpty) ...[
+            if (showTranslationText) ...[
+              if (message.originalText.isNotEmpty) ...[
+                Text(
+                  message.originalText,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF888888),
+                    fontStyle: FontStyle.italic,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 5),
+              ],
               Text(
-                message.originalText,
+                message.translatedText,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: const Color(0xFF1A1A1A),
+                  fontWeight: FontWeight.w500,
+                  height: 1.35,
+                ),
+              ),
+            ] else if (onReplay != null)
+              Text(
+                'Translation (audio only)',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: const Color(0xFF888888),
                   fontStyle: FontStyle.italic,
-                  height: 1.4,
                 ),
               ),
-              const SizedBox(height: 5),
-            ],
-
-            // ── Translation (large, prominent) ───────────────────────────
-            Text(
-              message.translatedText,
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: const Color(0xFF1A1A1A),
-                fontWeight: FontWeight.w500,
-                height: 1.35,
-              ),
-            ),
           ],
         ),
       ),

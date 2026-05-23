@@ -1,5 +1,5 @@
 name: grok_translate
-description: "Grok Translate – Universal real-time voice translator powered by the Grok Voice Agent API."
+description: "Babelfish – real-time two-person voice translator powered by the Grok Realtime API."
 publish_to: 'none'
 version: 1.0.0+1
 

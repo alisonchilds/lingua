@@ -11,6 +11,7 @@ import '../services/audio_player_service.dart';
 import '../services/grok_api_service.dart';
 import '../services/grok_audio_service.dart';
 import '../services/preferences_service.dart';
+import '../utils/translation_guard.dart';
 
 // ---------------------------------------------------------------------------
 // Providers
@@ -127,6 +128,8 @@ class ConversationController extends StateNotifier<ConversationState> {
   // that slip through the accumulator dedup. Cleared after each completed
   // translation cycle so the same phrase can be translated again next utterance.
   String? _lastTranslatedText;
+
+  int _assistantRetryCount = 0;
 
   // Replay cache: maps message ID → WAV bytes so the user can re-hear any
   // past translation. Capped at 50 entries to keep memory bounded.
@@ -279,22 +282,42 @@ class ConversationController extends StateNotifier<ConversationState> {
     await _prefs.setSubtitlesEnabled(newVal);
   }
 
-  /// Update VAD threshold (persisted).
+  /// Update VAD threshold (persisted). Applies to the live session when active.
   Future<void> setVadThreshold(double threshold) async {
     state = state.copyWith(vadThreshold: threshold);
     await _prefs.setVadSettings(VadSettings(
       threshold: threshold,
       silenceDurationMs: state.vadSilenceDurationMs,
     ));
+    _applySessionSettingsIfActive();
   }
 
-  /// Update VAD silence duration (persisted).
+  /// Update VAD silence duration (persisted). Applies to the live session when active.
   Future<void> setVadSilenceDuration(int ms) async {
     state = state.copyWith(vadSilenceDurationMs: ms);
     await _prefs.setVadSettings(VadSettings(
       threshold: state.vadThreshold,
       silenceDurationMs: ms,
     ));
+    _applySessionSettingsIfActive();
+  }
+
+  Future<void> setVoiceId(String voiceId) async {
+    await _prefs.setVoiceId(voiceId);
+    _applySessionSettingsIfActive(voiceId: voiceId);
+  }
+
+  void _applySessionSettingsIfActive({String? voiceId}) {
+    if (!state.isSessionActive) return;
+    final langCfg = state.languageConfig ?? const LanguageConfig();
+    _api.updateSession(
+      languageConfig: langCfg,
+      vadSettings: VadSettings(
+        threshold: state.vadThreshold,
+        silenceDurationMs: state.vadSilenceDurationMs,
+      ),
+      voiceId: voiceId ?? _prefs.getVoiceId(),
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -553,6 +576,23 @@ class ConversationController extends StateNotifier<ConversationState> {
 
     final sanitized = _sanitizeTranslation(textForSanitization);
 
+
+    if (TranslationGuard.looksLikeAssistantReply(
+            sanitized, _pendingTranscript ?? '') &&
+        _assistantRetryCount == 0 &&
+        _pendingTranscript != null) {
+      _assistantRetryCount = 1;
+      _responseMessageAdded = false;
+      _log.w('Assistant-mode output detected — strict retry: "$sanitized"');
+      if (state.appMode == AppMode.translator) {
+        _api.cancelResponse();
+        _player.stop();
+      }
+      _reissuePendingTranslation(strict: true);
+      return;
+    }
+    _assistantRetryCount = 0;
+
     final msg = TranslationMessage(
       id: _uuid.v4(),
       speaker: speaker,
@@ -628,6 +668,7 @@ class ConversationController extends StateNotifier<ConversationState> {
       return;
     }
     _lastTranslatedText = transcript;
+    _assistantRetryCount = 0;
 
     final cfg = state.languageConfig ?? const LanguageConfig();
 
@@ -644,8 +685,7 @@ class ConversationController extends StateNotifier<ConversationState> {
       // translate. Show the raw transcript directly and skip the model call —
       // avoids "I appreciate that." / "Sure!" commentary from the model when
       // it is asked to translate English → English.
-      if (state.detectedLang1 != null &&
-          state.detectedLang1!.toLowerCase() == toLang.toLowerCase()) {
+      if (_shouldSkipSameLanguageTranslation(toLang)) {
         _pendingFrom = fromLang;
         _pendingTo = toLang;
         _pendingSpeaker = speaker;
@@ -694,6 +734,18 @@ class ConversationController extends StateNotifier<ConversationState> {
         fromLang = cfg.lang2Name; toLang = cfg.lang1Name; speaker = Speaker.user2;
       }
       _translateForward = !_translateForward;
+
+
+      if (_shouldSkipSameLanguageTranslation(toLang)) {
+        _pendingFrom = fromLang;
+        _pendingTo = toLang;
+        _pendingSpeaker = speaker;
+        _addMessage(transcript);
+        _translationInFlight = false;
+        _lastTranslatedText = null;
+        _setStatus(ConversationStatus.listening);
+        return;
+      }
     }
 
     _pendingFrom = fromLang;
@@ -724,6 +776,36 @@ class ConversationController extends StateNotifier<ConversationState> {
 
     // Save for the next call's context (used by the reverse-direction biDir)
     _previousOriginalText = transcript;
+  }
+
+  bool _shouldSkipSameLanguageTranslation(String toLang) {
+    final detected = state.detectedLang1;
+    if (detected == null) return false;
+    return TranslationGuard.languageNamesMatch(detected, toLang);
+  }
+
+  void _reissuePendingTranslation({required bool strict}) {
+    final transcript = _pendingTranscript;
+    if (transcript == null) return;
+
+    final fromLang = _pendingFrom ?? 'auto';
+    final toLang = _pendingTo ?? _prefs.getMyLanguageName();
+    final textOnly = state.appMode == AppMode.subtitles;
+    final myLangStr = _prefs.getMyLanguageName();
+    final isPreDetectionReverse =
+        state.detectedLang1 == null && fromLang == myLangStr;
+
+    _translationInFlight = true;
+    _api.requestTranslation(
+      transcript: transcript,
+      fromLanguage: fromLang,
+      toLanguage: toLang,
+      textOnly: textOnly,
+      myLanguage: fromLang == 'auto' ? myLangStr : null,
+      previousOriginalText:
+          isPreDetectionReverse ? _previousOriginalText : null,
+      strict: strict,
+    );
   }
 
   /// Remove any prompt framing the model may echo back verbatim.
@@ -848,8 +930,27 @@ class ConversationController extends StateNotifier<ConversationState> {
     _log.e('Error: $message');
     state = state.copyWith(
       status: ConversationStatus.error,
-      errorMessage: message,
+      errorMessage: _humanizeError(message),
     );
+  }
+
+  String _humanizeError(String raw) {
+    final lower = raw.toLowerCase();
+    if (lower.contains('websocket') ||
+        lower.contains('connection') ||
+        lower.contains('connect')) {
+      return 'Could not reach the translation server. Check your network and try again.';
+    }
+    if (lower.contains('microphone') || lower.contains('permission')) {
+      return 'Microphone access is required. Allow the mic in your browser or device settings.';
+    }
+    if (lower.contains('not configured') || lower.contains('500')) {
+      return 'The translation proxy is not configured. Contact the app administrator.';
+    }
+    if (lower.contains('forbidden') || lower.contains('403')) {
+      return 'This app is not allowed to connect from this origin.';
+    }
+    return raw.length > 120 ? '${raw.substring(0, 117)}…' : raw;
   }
 
   @override

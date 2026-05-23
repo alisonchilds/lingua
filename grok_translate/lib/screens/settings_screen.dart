@@ -59,7 +59,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Future<void> _selectVoice(String id) async {
-    await ref.read(preferencesServiceProvider).setVoiceId(id);
+    await ref.read(conversationControllerProvider.notifier).setVoiceId(id);
     if (mounted) setState(() => _voiceId = id);
   }
 
@@ -201,7 +201,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             child: SwitchListTile(
               secondary: const Icon(Icons.closed_caption_outlined),
               title: const Text('Live subtitles'),
-              subtitle: const Text('Show translated text in the conversation'),
+              subtitle: const Text('On Translate: show text while listening. Off: audio only.'),
               value: state.subtitlesEnabled,
               onChanged: (_) => controller.toggleSubtitles(),
             ),
@@ -237,7 +237,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Lower = more sensitive to quiet speech. Default: 0.70',
+                    'Lower = more sensitive to quiet speech. Default: 0.70. Changes apply immediately during an active session.',
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.outline),
                   ),
@@ -263,7 +263,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Time after speech stops before translation triggers. Default: 300 ms',
+                    'Time after speech stops before translation triggers. Default: 300 ms. Changes apply immediately during an active session.',
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.outline),
                   ),

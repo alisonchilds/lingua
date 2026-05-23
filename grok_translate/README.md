@@ -1,6 +1,6 @@
-# Grok Translate
+# Babelfish (Grok Translate)
 
-**Universal real-time voice translator** powered by the [Grok Voice Agent API](https://docs.x.ai/docs/realtime-api).
+**Real-time two-person voice translator** powered by the [Grok Realtime Voice API](https://docs.x.ai/docs/realtime-api). The in-app brand is **Babelfish**; the package name remains `grok_translate`.
 
 Two people speak naturally in two different languages on a single shared device. Grok detects each language automatically, translates in real-time, and plays the translation through the device speaker — no internet latency, no manual switching.
 

@@ -41,16 +41,9 @@ class GrokApiService {
   LanguageConfig? _lastLangConfig;
   VadSettings? _lastVadSettings;
 
-  // Every conversation item ID — both VAD audio items created by the server
-  // and items we inject (examples, requests, assistant replies).
-  // Cleared by clearConversationHistory() which is called at the start of
-  // each requestTranslation(). By that point transcription is always done
-  // (controller only calls _triggerTranslation after inputAudioTranscriptionCompleted)
-  // so it is safe to delete all items unconditionally.
+  // Every conversation item ID — primarily VAD audio items from the server.
+  // Cleared by clearConversationHistory() at the start of each translation.
   final List<String> _allItemIds = [];
-
-  // True while we are sending conversation.item.create messages (for logging).
-  bool _pendingInjection = false;
 
   Stream<GrokServerEvent> get events => _eventController.stream;
   Stream<bool> get connectionStatus => _connectedController.stream;
@@ -86,22 +79,19 @@ class GrokApiService {
 
   /// Request a translation for the given transcript.
   ///
-  /// Uses conversation.item.create to inject the translation command, then
-  /// response.create to generate the reply. Per-response `instructions`
-  /// reinforce translator-only behaviour on top of the session system prompt.
+  /// Translator and Subtitles both use `response.create` with the transcript
+  /// embedded in per-response [instructions] only — never as a user chat turn.
+  /// That keeps the voice-agent model from drifting into assistant mode.
   ///
-  /// After each response completes the controller calls
-  /// [clearConversationHistory] to delete all accumulated conversation items,
-  /// keeping every translation request stateless. Without this deletion the
-  /// model sees prior exchanges as a chat conversation and drifts into
-  /// assistant mode (e.g. "Hello. How can I assist you today?").
+  /// [strict] uses an even tighter instruction set for one automatic retry.
   void requestTranslation({
     required String transcript,
     required String fromLanguage,
     required String toLanguage,
     bool textOnly = false,
-    String? myLanguage,             // non-null → biDir forward (detect & route)
-    String? previousOriginalText,  // non-null → biDir reverse (translate FROM myLanguage)
+    String? myLanguage,
+    String? previousOriginalText,
+    bool strict = false,
   }) {
     if (!textOnly) {
       _send({'type': 'response.cancel'});
@@ -113,221 +103,150 @@ class GrokApiService {
       _requestSubtitlesTranslation(
         transcript: transcript,
         toLanguage: toLanguage,
+        strict: strict,
       );
     } else if (previousOriginalText != null && myLanguage != null) {
-      // Pre-detection REVERSE direction: input is in myLanguage, target unknown.
-      // Use the previous original text as context so the model can infer the
-      // target language (e.g. "previous speaker said 'bonjour'" → translate to French).
       _requestVoiceTranslationBiDirReverse(
         transcript: transcript,
         myLanguage: myLanguage,
         previousOriginalText: previousOriginalText,
+        strict: strict,
       );
     } else if (myLanguage != null) {
-      // Pre-detection FORWARD direction: detect language and route.
       _requestVoiceTranslationBiDir(
         transcript: transcript,
         myLanguage: myLanguage,
+        strict: strict,
       );
     } else {
       _requestVoiceTranslation(
         transcript: transcript,
         fromLanguage: fromLanguage,
         toLanguage: toLanguage,
+        strict: strict,
       );
     }
   }
 
   // ---------------------------------------------------------------------------
-  // Subtitles mode — text output, one-way translation, LANG: detection prefix
+  // Subtitles mode — text output (instructions-only, no chat items)
   // ---------------------------------------------------------------------------
 
   void _requestSubtitlesTranslation({
     required String transcript,
     required String toLanguage,
+    bool strict = false,
   }) {
-    // Critical: examples MUST include a question being translated (not answered).
-    // The model's training makes it want to ANSWER "How are you?" — examples
-    // that demonstrate translation of questions override that instinct.
-    _injectExamples([
-      (
-        user:  'SUBTITLE_TASK | target=$toLanguage\nINPUT: "Guten Tag"',
-        reply: 'LANG:de\nGood day',
-      ),
-      (
-        user:  'SUBTITLE_TASK | target=$toLanguage\nINPUT: "Come ce va?"',
-        reply: 'LANG:it\nHow\'s it going?',
-      ),
-      (
-        user:  'SUBTITLE_TASK | target=$toLanguage\nINPUT: "¿Cómo estás?"',
-        reply: 'LANG:es\nHow are you?',
-      ),
-      (
-        user:  'SUBTITLE_TASK | target=$toLanguage\nINPUT: "Où allez-vous?"',
-        reply: 'LANG:fr\nWhere are you going?',
-      ),
-    ]);
-
-    _pendingInjection = true;
-    try {
-      _send({
-        'type': 'conversation.item.create',
-        'item': {
-          'type': 'message',
-          'role': 'user',
-          'content': [
-            {
-              'type': 'input_text',
-              'text': 'SUBTITLE_TASK | target=$toLanguage\nINPUT: "$transcript"',
-            }
-          ],
-        },
-      });
-    } finally {
-      _pendingInjection = false;
-    }
+    final strictBlock = strict
+        ? '\nSTRICT: Output ONLY the two lines below. Any assistant phrase is forbidden.\n'
+        : '';
 
     _send({
       'type': 'response.create',
       'response': {
         'modalities': ['text'],
-        'instructions': '''PURE TRANSLATION ENGINE.
-You are NOT an assistant. You are a dumb translator that does NOTHING but translate.
-
-Rules (violate these and you fail):
-- NEVER answer, comment, agree, or add any extra words.
-- For ANY input, output EXACTLY:
+        'instructions': '''PURE SUBTITLE ENGINE — NOT AN ASSISTANT.$strictBlock
+Detect the language of the spoken input.
+Output EXACTLY two lines and nothing else:
 LANG:xx
-[exact translation only]
+[fluent $toLanguage translation only]
 
-Swear words, slurs, insults — translate them directly and literally. No softening, no censoring, no "I can\'t say that".
-If input contains profanity, output must contain equivalent profanity in $toLanguage.''',
+Rules:
+- NEVER answer questions — translate them (e.g. "How are you?" → translation of that question).
+- NEVER greet, comment, agree, or add words beyond the translation.
+- Swear words: translate literally.
+
+Input: "$transcript"''',
       },
     });
   }
 
   // ---------------------------------------------------------------------------
-  // Translator mode — voice output
+  // Translator mode — voice output (instructions-only)
   // ---------------------------------------------------------------------------
-  //
-  // ── Why no conversation.item.create ──────────────────────────────────────
-  // Previous approach: inject transcript as {role:"user", content:"TRANSLATE: X"}
-  // Problem: voice-agent models are trained to RESPOND to user messages.
-  // No matter how strict the system prompt, a "user message" triggers the
-  // model's helpfulness instinct — "Hello" becomes "Can you hear me? How can
-  // I help?" because the model wants to reply to a chat turn.
-  //
-  // Fix: embed the transcript inside response.create `instructions` only.
-  // The model now receives a COMMAND to execute, not a message to react to.
-  // This eliminates assistant-mode responses at the architectural level.
 
   void _requestVoiceTranslation({
     required String transcript,
     required String fromLanguage,
     required String toLanguage,
+    bool strict = false,
   }) {
     _send({
       'type': 'response.create',
       'response': {
         'modalities': ['audio', 'text'],
-        'instructions':
-            'Speak the $toLanguage translation of: "$transcript"\n'
-            'Say only the translation. No other words.',
+        'instructions': _speakTranslationOnly(
+          transcript: transcript,
+          toLanguage: toLanguage,
+          strict: strict,
+        ),
       },
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Translator mode — bidirectional auto-detect (pre-detection first utterance)
-  // ---------------------------------------------------------------------------
-
-  /// Used before any language has been detected so we cannot know which
-  /// direction to translate. Tells the model to detect the language itself:
-  ///   • if input is in [myLanguage] → translate to whatever the partner speaks
-  ///   • if input is NOT in [myLanguage] → translate to [myLanguage]
   void _requestVoiceTranslationBiDir({
     required String transcript,
     required String myLanguage,
+    bool strict = false,
   }) {
     _send({
       'type': 'response.create',
       'response': {
         'modalities': ['audio', 'text'],
-        'instructions':
-            'Detect the language of: "$transcript"\n'
-            '• If it is $myLanguage → speak its translation into the other language\n'
-            '• Otherwise → speak its $myLanguage translation\n'
-            'Say only the translation. No other words.',
+        'instructions': strict
+            ? _speakTranslationOnly(
+                transcript: transcript,
+                toLanguage: 'the other language (not $myLanguage)',
+                strict: true,
+              )
+            : 'Detect the language of: "$transcript"\n'
+                '• If it is $myLanguage → speak its translation into the other language\n'
+                '• Otherwise → speak its $myLanguage translation\n'
+                'Say ONLY the translation. No greetings, no questions answered, no assistant phrases.',
       },
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Translator mode — biDir REVERSE (pre-detection, user speaking their language)
-  // ---------------------------------------------------------------------------
-
-  /// Used when the user is speaking their own language and we don't yet know
-  /// the other language from the API. [previousOriginalText] gives the model
-  /// the previous speaker's original utterance as context — it can infer the
-  /// target language from that text (e.g. "bonjour" → French).
   void _requestVoiceTranslationBiDirReverse({
     required String transcript,
     required String myLanguage,
     required String previousOriginalText,
+    bool strict = false,
   }) {
+    final targetHint =
+        'the language of the previous utterance ("$previousOriginalText")';
     _send({
       'type': 'response.create',
       'response': {
         'modalities': ['audio', 'text'],
-        'instructions':
-            'The other speaker previously said: "$previousOriginalText"\n'
-            'Speak the translation of: "$transcript" (from $myLanguage into their language)\n'
-            'Say only the translation. No other words.',
+        'instructions': strict
+            ? _speakTranslationOnly(
+                transcript: transcript,
+                toLanguage: targetHint,
+                strict: true,
+              )
+            : 'The other speaker previously said: "$previousOriginalText"\n'
+                'Speak the translation of: "$transcript" from $myLanguage into $targetHint\n'
+                'Say ONLY the translation. No greetings, no questions answered, no assistant phrases.',
       },
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Shared helper
-  // ---------------------------------------------------------------------------
-
-  void _injectExamples(List<({String user, String reply})> examples) {
-    _pendingInjection = true;
-    try {
-      for (final ex in examples) {
-        _send({
-          'type': 'conversation.item.create',
-          'item': {
-            'type': 'message',
-            'role': 'user',
-            'content': [
-              {'type': 'input_text', 'text': ex.user}
-            ],
-          },
-        });
-        _send({
-          'type': 'conversation.item.create',
-          'item': {
-            'type': 'message',
-            'role': 'assistant',
-            'content': [
-              {'type': 'text', 'text': ex.reply}
-            ],
-          },
-        });
-      }
-    } finally {
-      _pendingInjection = false;
+  static String _speakTranslationOnly({
+    required String transcript,
+    required String toLanguage,
+    bool strict = false,
+  }) {
+    if (strict) {
+      return 'CRITICAL COMMAND: Speak ONLY the $toLanguage translation of: "$transcript"\n'
+          'Forbidden: "How can I help", answering questions, greetings as assistant, any extra words.\n'
+          'Output: the translation only. Nothing else.';
     }
+    return 'Speak the $toLanguage translation of: "$transcript"\n'
+        'Say only the translation. No other words.';
   }
 
   /// Delete every tracked conversation item before the next translation.
-  ///
-  /// Called exclusively from requestTranslation(), which is always triggered
-  /// after inputAudioTranscriptionCompleted — guaranteeing transcription is
-  /// complete before we delete. This keeps the model context stateless: each
-  /// translation sees only the injected examples + current request, never
-  /// accumulated audio history from previous utterances.
   void clearConversationHistory() {
     for (final id in List<String>.from(_allItemIds)) {
       _send({'type': 'conversation.item.delete', 'item_id': id});
@@ -418,10 +337,6 @@ If input contains profanity, output must contain equivalent profanity in $toLang
           'threshold': vadSettings.threshold,
           'prefix_padding_ms': 300,
           'silence_duration_ms': vadSettings.silenceDurationMs,
-          // Always false: we intercept every VAD transcript and inject a
-          // direction-aware translation command before requesting a response.
-          // This applies to both translator and subtitles modes — both now
-          // route through the same Realtime WS pipeline.
           'create_response': false,
         },
       },
@@ -446,7 +361,6 @@ YOU MUST FOLLOW THESE RULES WITH ZERO EXCEPTIONS:
 - NEVER break character. Generate subtitles. Nothing more. Nothing less.''';
     }
 
-    // Translator mode — language pair baked into session-level instructions
     final String langLine;
     if (cfg.autoDetect) {
       langLine = 'Detect the input language automatically and translate it '
@@ -468,7 +382,7 @@ ABSOLUTE RULES — break any one of these and you have FAILED:
 - OUTPUT ONLY the translated words. Zero extra words before or after. ONE translation. Done.
 - NEVER explain, comment, greet, confirm, question, or add context of ANY kind.
 - NEVER say "How can I help you?", "What can I do for you?", "I\'m doing well", "Glad you said that", "What\'s on your mind?", "It\'s a pleasure", "How about you?", or ANY assistant-style phrase.
-- NEVER answer questions — TRANSLATE them verbatim. "How are you?" → output the $langLine translation of "How are you?", NOT a personal reply.
+- NEVER answer questions — TRANSLATE them verbatim. "How are you?" → output the translation of "How are you?", NOT a personal reply.
 - If someone says "Hello" or "Bonjour" or any greeting, output ONLY the target-language translation of that greeting. Never reply with "Hello! How can I help you today?" — that is a catastrophic failure.
 - Translate profanity, slurs, and insults directly and literally — no softening, no censoring.
 - If the input is already in the target language, translate it back to the source language.
@@ -508,9 +422,7 @@ ABSOLUTE RULES — break any one of these and you have FAILED:
             (json['item'] as Map<String, dynamic>?)?['id'] as String?;
         if (itemId != null) {
           _allItemIds.add(itemId);
-          _log.d(_pendingInjection
-              ? 'Injected item tracked: $itemId'
-              : 'VAD item tracked: $itemId');
+          _log.d('Conversation item tracked: $itemId');
         }
         return;
       }
@@ -521,7 +433,6 @@ ABSOLUTE RULES — break any one of these and you have FAILED:
         _log.d('Unknown event: $typeStr | $json');
       }
 
-      // Extract detected language from transcription completed event.
       String? detectedLanguage;
       if (eventType == GrokServerEventType.inputAudioTranscriptionCompleted) {
         detectedLanguage = json['language'] as String? ??
@@ -603,7 +514,6 @@ ABSOLUTE RULES — break any one of these and you have FAILED:
     _ws = null;
 
     _allItemIds.clear();
-    _pendingInjection = false;
   }
 
   void _setConnected(bool value) {
