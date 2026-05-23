@@ -65,4 +65,30 @@ class TranslationGuard {
 
   static bool languageNamesMatch(String a, String b) =>
       a.trim().toLowerCase() == b.trim().toLowerCase();
+
+  static final _cjk = RegExp(r'[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]');
+
+  /// True when the model mixed multiple languages in one reply (e.g. 你好 + Bonjour).
+  static bool looksLikeMultilingualGarbage(String output, String targetLanguage) {
+    final text = output.trim();
+    if (text.length < 8) return false;
+
+    final target = targetLanguage.toLowerCase();
+    final lower = text.toLowerCase();
+    var families = 0;
+
+    if (_cjk.hasMatch(text)) families++;
+    if (RegExp(r'[a-zA-Z]').hasMatch(text)) families++;
+    if (RegExp(r'\b(bonjour|salut|merci|euh|oui|non|ça)\b', caseSensitive: false)
+        .hasMatch(lower)) {
+      families++;
+    }
+    if (RegExp(r'\b(hola|gracias|sí)\b', caseSensitive: false).hasMatch(lower)) {
+      families++;
+    }
+
+    if (families >= 2) return true;
+    if (target.contains('english') && _cjk.hasMatch(text)) return true;
+    return false;
+  }
 }

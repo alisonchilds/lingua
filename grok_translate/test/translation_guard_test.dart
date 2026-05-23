@@ -25,3 +25,13 @@ void main() {
     });
   });
 }
+
+    test('detects multilingual garbage', () {
+      expect(
+        TranslationGuard.looksLikeMultilingualGarbage(
+          '你好 ? Bonjour. Bonjour. Hello.',
+          'English',
+        ),
+        isTrue,
+      );
+    });
