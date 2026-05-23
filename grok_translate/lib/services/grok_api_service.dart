@@ -177,6 +177,7 @@ Input: "$transcript"''',
         'modalities': ['audio', 'text'],
         'instructions': _speakTranslationOnly(
           transcript: transcript,
+          fromLanguage: fromLanguage,
           toLanguage: toLanguage,
           strict: strict,
         ),
@@ -234,16 +235,19 @@ Input: "$transcript"''',
 
   static String _speakTranslationOnly({
     required String transcript,
+    required String fromLanguage,
     required String toLanguage,
     bool strict = false,
   }) {
     if (strict) {
-      return 'CRITICAL COMMAND: Speak ONLY the $toLanguage translation of: "$transcript"\n'
-          'Forbidden: "How can I help", answering questions, greetings as assistant, any extra words.\n'
-          'Output: the translation only. Nothing else.';
+      return 'CRITICAL: Translate from $fromLanguage to $toLanguage ONLY.\n'
+          'Text ($fromLanguage): "$transcript"\n'
+          'Speak ONLY in $toLanguage. No other languages. No assistant phrases.\n'
+          'Forbidden: answering the question, "How can I help", extra commentary.';
     }
-    return 'Speak the $toLanguage translation of: "$transcript"\n'
-        'Say only the translation. No other words.';
+    return 'Translate from $fromLanguage to $toLanguage.\n'
+        'Input ($fromLanguage): "$transcript"\n'
+        'Speak ONLY the $toLanguage translation. No other words or languages.';
   }
 
   /// Delete every tracked conversation item before the next translation.
@@ -363,8 +367,12 @@ YOU MUST FOLLOW THESE RULES WITH ZERO EXCEPTIONS:
 
     final String langLine;
     if (cfg.autoDetect) {
-      langLine = 'Detect the input language automatically and translate it '
-          'into the other language being used in this conversation.';
+      langLine = 'English is the HUB language. Rules: '
+          '(1) Any non-English speech → speak ONLY the English translation. '
+          '(2) English speech → speak ONLY the translation in the partner language '
+          '(the non-English language already detected in this session). '
+          'Never output Chinese, Spanish, or other languages unless that IS the target. '
+          'Never answer questions — only translate them.';
     } else {
       langLine = 'The ONLY language pair in this session is '
           '${cfg.lang1Name} ↔ ${cfg.lang2Name}. '

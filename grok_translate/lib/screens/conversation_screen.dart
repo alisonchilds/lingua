@@ -323,11 +323,9 @@ class _LanguagePills extends ConsumerWidget {
     final cfg = state.languageConfig ?? const LanguageConfig();
 
     // Left: always show the configured language (from myLanguage / lang1), not "Auto"
-    final lang1 = state.detectedLang1 ??
-        (cfg.lang1Code == 'auto' ? 'English' : cfg.lang1Name);
-    // Right: show detected partner language, configured lang2, or 'Auto'
+    final lang1 = 'English';
     final lang2 = state.detectedLang2 ??
-        (cfg.lang2Code == 'auto' ? 'Auto' : cfg.lang2Name);
+        (cfg.autoDetect ? 'Auto' : cfg.lang2Name);
 
     return Container(
       color: AppTheme.dark,

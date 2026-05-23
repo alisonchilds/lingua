@@ -75,6 +75,7 @@ final conversationControllerProvider =
 ///   speaking   → listening   (audio.done + playback complete)
 ///   *          → error       (unrecoverable error)
 class ConversationController extends StateNotifier<ConversationState> {
+  static const _hubLanguage = 'English';
   ConversationController({
     required GrokApiService apiService,
     required GrokAudioService audioService,
@@ -205,20 +206,12 @@ class ConversationController extends StateNotifier<ConversationState> {
       silenceDurationMs: state.vadSilenceDurationMs,
     );
 
-    if (langCfg.autoDetect && langCfg.lang1Code != 'auto') {
-      final myLang = _anchoredMyLanguage(langCfg);
-      final flag = kSupportedLanguages
-          .firstWhere(
-            (l) => l.code == langCfg.lang1Code,
-            orElse: () => kSupportedLanguages.firstWhere(
-              (l) => l.name == myLang,
-              orElse: () => const SupportedLanguage('en', 'English', '🇺🇸'),
-            ),
-          )
-          .flag;
+    if (langCfg.autoDetect) {
       state = state.copyWith(
-        detectedLang1: myLang,
-        detectedLang1Flag: flag,
+        detectedLang1: _hubLanguage,
+        detectedLang1Flag: '🇺🇸',
+        detectedLang2: null,
+        detectedLang2Flag: null,
       );
     }
 
@@ -573,6 +566,25 @@ class ConversationController extends StateNotifier<ConversationState> {
 
     final sanitized = _sanitizeTranslation(textForSanitization);
 
+    final targetLang = _pendingTo ?? '';
+    if ((TranslationGuard.looksLikeAssistantReply(
+                sanitized, _pendingTranscript ?? '') ||
+            TranslationGuard.looksLikeMultilingualGarbage(
+                sanitized, targetLang)) &&
+        _assistantRetryCount == 0 &&
+        _pendingTranscript != null) {
+      _assistantRetryCount = 1;
+      _responseMessageAdded = false;
+      _log.w('Bad translation output — strict retry: "$sanitized"');
+      if (state.appMode == AppMode.translator) {
+        _api.cancelResponse();
+        _player.stop();
+      }
+      _reissuePendingTranslation(strict: true);
+      return;
+    }
+    _assistantRetryCount = 0;
+
     final msg = TranslationMessage(
       id: _uuid.v4(),
       speaker: speaker,
@@ -639,6 +651,23 @@ class ConversationController extends StateNotifier<ConversationState> {
   /// Both Translator and Subtitles modes call this method.
   ///   Translator: audio + text response, bidirectional speaker alternation.
   ///   Subtitles:  text-only response, always FROM detected lang TO target.
+  bool _isHubLanguage(String lang) =>
+      TranslationGuard.languageNamesMatch(lang, _hubLanguage);
+
+  /// Partner = the non-English language detected in this session.
+  String? get _partnerLanguage => state.detectedLang2;
+
+  void _finishPassthrough(String transcript) {
+    _pendingFrom = _hubLanguage;
+    _pendingTo = _hubLanguage;
+    _pendingSpeaker = Speaker.user1;
+    _addMessage(transcript);
+    _utteranceLanguageName = null;
+    _translationInFlight = false;
+    _lastTranslatedText = null;
+    _setStatus(ConversationStatus.listening);
+  }
+
   void _triggerTranslation(String transcript) {
     // Backstop: if the accumulator dedup lets the same text through twice
     // (e.g. a race between the speechStopped shortcut and the 1200 ms timer),
@@ -648,6 +677,7 @@ class ConversationController extends StateNotifier<ConversationState> {
       return;
     }
     _lastTranslatedText = transcript;
+    _assistantRetryCount = 0;
 
     final cfg = state.languageConfig ?? const LanguageConfig();
 
@@ -656,60 +686,40 @@ class ConversationController extends StateNotifier<ConversationState> {
     final Speaker speaker;
 
     if (state.appMode == AppMode.subtitles) {
-      fromLang = state.detectedLang1 ?? _prefs.getMyLanguageName();
-      toLang = cfg.autoDetect ? _prefs.getMyLanguageName() : cfg.lang2Name;
+      final spoken = _utteranceLanguageName ?? state.detectedLang2;
+      fromLang = spoken ?? 'unknown';
+      toLang = cfg.autoDetect ? _hubLanguage : cfg.lang2Name;
       speaker = Speaker.user1;
 
-      // When the detected language matches the target there is nothing to
-      // translate. Show the raw transcript directly and skip the model call —
-      // avoids "I appreciate that." / "Sure!" commentary from the model when
-      // it is asked to translate English → English.
-      if (state.detectedLang1 != null &&
-          state.detectedLang1!.toLowerCase() == toLang.toLowerCase()) {
-        _pendingFrom = fromLang;
-        _pendingTo = toLang;
-        _pendingSpeaker = speaker;
-        _addMessage(transcript);
-        _resetToListening();
+      if (cfg.autoDetect &&
+          spoken != null &&
+          _isHubLanguage(spoken)) {
+        _finishPassthrough(transcript);
         return;
       }
     } else if (cfg.autoDetect) {
-      final myLang = _anchoredMyLanguage(cfg);
+      // English hub: foreign → English, then English → detected partner language.
       final spoken = _utteranceLanguageName;
-      final partner = state.detectedLang2;
+      final partner = _partnerLanguage;
 
-      if (spoken != null && TranslationGuard.languageNamesMatch(spoken, myLang)) {
+      if (spoken != null && _isHubLanguage(spoken)) {
         if (partner == null) {
-          _pendingFrom = myLang;
-          _pendingTo = myLang;
-          _pendingSpeaker = Speaker.user1;
-          _addMessage(transcript);
-          _utteranceLanguageName = null;
-          _translationInFlight = false;
-          _lastTranslatedText = null;
-          _setStatus(ConversationStatus.listening);
+          _finishPassthrough(transcript);
           return;
         }
-        fromLang = myLang;
+        fromLang = _hubLanguage;
         toLang = partner;
         speaker = Speaker.user1;
       } else if (spoken != null) {
         fromLang = spoken;
-        toLang = myLang;
+        toLang = _hubLanguage;
         speaker = Speaker.user2;
       } else if (partner != null) {
         fromLang = partner;
-        toLang = myLang;
+        toLang = _hubLanguage;
         speaker = Speaker.user2;
       } else {
-        _pendingFrom = myLang;
-        _pendingTo = myLang;
-        _pendingSpeaker = Speaker.user1;
-        _addMessage(transcript);
-        _utteranceLanguageName = null;
-        _translationInFlight = false;
-        _lastTranslatedText = null;
-        _setStatus(ConversationStatus.listening);
+        _finishPassthrough(transcript);
         return;
       }
     } else {
@@ -771,24 +781,17 @@ class ConversationController extends StateNotifier<ConversationState> {
     final cfg = state.languageConfig ?? const LanguageConfig();
 
     // English + Auto: lang1 is the user's language; lang2 is learned from speech.
-    if (cfg.autoDetect && cfg.lang1Code != 'auto') {
-      final myLang = _anchoredMyLanguage(cfg);
-      final myFlag = kSupportedLanguages
-          .firstWhere(
-            (l) => l.code == cfg.lang1Code,
-            orElse: () => match,
-          )
-          .flag;
-      if (TranslationGuard.languageNamesMatch(match.name, myLang)) {
+    if (cfg.autoDetect) {
+      if (_isHubLanguage(match.name)) {
         state = state.copyWith(
-          detectedLang1: myLang,
-          detectedLang1Flag: myFlag,
+          detectedLang1: _hubLanguage,
+          detectedLang1Flag: '🇺🇸',
           activeSpeaker: Speaker.user1,
         );
       } else {
         state = state.copyWith(
-          detectedLang1: myLang,
-          detectedLang1Flag: myFlag,
+          detectedLang1: _hubLanguage,
+          detectedLang1Flag: '🇺🇸',
           detectedLang2: state.detectedLang2 ?? match.name,
           detectedLang2Flag: state.detectedLang2Flag ?? match.flag,
           activeSpeaker: Speaker.user2,
