@@ -31,6 +31,8 @@ class AudioPlayerService {
 
   bool get isPlaying => _player.playing;
 
+  bool get hasBufferedAudio => _isBuffering && _pcmChunks.isNotEmpty;
+
   /// Called when the first audio delta arrives from Grok.
   void beginBuffering() {
     _pcmChunks.clear();

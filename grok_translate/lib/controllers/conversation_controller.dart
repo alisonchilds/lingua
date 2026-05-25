@@ -13,6 +13,7 @@ import '../services/grok_audio_service.dart';
 import '../services/preferences_service.dart';
 import '../utils/transcript_language_hint.dart';
 import '../utils/translation_guard.dart';
+import '../utils/translation_text_cleanup.dart';
 
 // ---------------------------------------------------------------------------
 // Providers
@@ -132,6 +133,11 @@ class ConversationController extends StateNotifier<ConversationState> {
 
   /// Whether the current utterance already used a strict-prompt retry.
   bool _strictRetryUsed = false;
+
+  /// Translator mode: translation text held until audio is ready to play.
+  String? _pendingTranslatedText;
+
+  bool _translatorMessageCommitted = false;
 
   // Replay cache: maps message ID → WAV bytes so the user can re-hear any
   // past translation. Capped at 50 entries to keep memory bounded.
@@ -456,7 +462,7 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.responseAudioDone:
-        _player.finishAndPlay();
+        unawaited(_onResponseAudioDone());
         break;
 
       case GrokServerEventType.responseAudioTranscriptDelta:
@@ -470,7 +476,13 @@ class ConversationController extends StateNotifier<ConversationState> {
       case GrokServerEventType.responseAudioTranscriptDone:
         final text = event.transcriptText ?? _transcriptBuffer.toString();
         if (text.isNotEmpty && !_responseMessageAdded) {
-          if (_addMessage(text)) _responseMessageAdded = true;
+          if (state.appMode == AppMode.translator) {
+            if (_stageTranslatorOutput(text)) {
+              _responseMessageAdded = true;
+            }
+          } else if (_addMessage(text)) {
+            _responseMessageAdded = true;
+          }
         }
         state = state.copyWith(partialTranscript: '');
         _transcriptBuffer.clear();
@@ -505,12 +517,21 @@ class ConversationController extends StateNotifier<ConversationState> {
         break;
 
       case GrokServerEventType.responseDone:
-        if (!_responseMessageAdded && _transcriptBuffer.isNotEmpty) {
+        // Translator commits on audio transcript + audio.done — never here.
+        if (state.appMode == AppMode.subtitles &&
+            !_responseMessageAdded &&
+            _transcriptBuffer.isNotEmpty) {
           if (_addMessage(_transcriptBuffer.toString())) {
             _responseMessageAdded = true;
           }
           _transcriptBuffer.clear();
           state = state.copyWith(partialTranscript: '');
+        }
+        _transcriptBuffer.clear();
+        if (state.appMode == AppMode.translator &&
+            _pendingTranslatedText != null &&
+            !_translatorMessageCommitted) {
+          unawaited(_flushTranslatorCommit());
         }
         _responseMessageAdded = false;
         // Accumulated text for THIS turn is done — clear it so a new
@@ -642,7 +663,9 @@ class ConversationController extends StateNotifier<ConversationState> {
 
   /// Discard a bad model response (assistant drift) before a strict retry.
   void _abortBadTranslationResponse() {
-    _responseMessageAdded = false;
+    // Mark handled so a trailing response.done cannot commit duplicate text.
+    _responseMessageAdded = true;
+    _pendingTranslatedText = null;
     _transcriptBuffer.clear();
     _player.clearPendingWav();
     unawaited(_player.stop());
@@ -651,6 +674,94 @@ class ConversationController extends StateNotifier<ConversationState> {
     if (state.appMode == AppMode.translator) {
       _setStatus(ConversationStatus.translating);
     }
+  }
+
+  /// Translator: validate output, stage text, and commit once audio is ready.
+  bool _stageTranslatorOutput(String translatedText) {
+    final original = _pendingTranscript ?? '';
+    final to = _pendingTo ?? _prefs.getMyLanguageName();
+    final sanitized = TranslationTextCleanup.deduplicateRepeatedPhrase(
+      _sanitizeTranslation(translatedText.trim()),
+    );
+
+    if (!_strictRetryUsed &&
+        TranslationGuard.shouldRetryStrict(
+          output: sanitized,
+          originalInput: original,
+          targetLanguage: to,
+        )) {
+      _strictRetryUsed = true;
+      _log.w('Assistant-like translation detected; strict retry: "$sanitized"');
+      _abortBadTranslationResponse();
+      _retryTranslationStrict();
+      return false;
+    }
+
+    _pendingTranslatedText = sanitized;
+    state = state.copyWith(partialTranscript: sanitized);
+    return true;
+  }
+
+  Future<void> _onResponseAudioDone() async {
+    if (_player.hasBufferedAudio) {
+      await _player.finishAndPlay();
+    }
+    await _flushTranslatorCommit();
+  }
+
+  Future<void> _flushTranslatorCommit() async {
+    if (state.appMode != AppMode.translator ||
+        _translatorMessageCommitted ||
+        _pendingTranslatedText == null) {
+      return;
+    }
+    final text = _pendingTranslatedText!;
+    if (!_player.hasBufferedAudio && _player.pendingWav == null) {
+      // Text arrived but no audio — still show the translation.
+      _log.w('Translator response had no audio; showing text only.');
+    }
+    _finalizePendingLanguages(
+      _pendingTranscript ?? '',
+      _pendingFrom ?? 'auto',
+      _pendingTo ?? _prefs.getMyLanguageName(),
+      _prefs.getMyLanguageName(),
+    );
+    _addMessageDirect(text);
+    _pendingTranslatedText = null;
+    _translatorMessageCommitted = true;
+    state = state.copyWith(partialTranscript: '');
+  }
+
+  /// Add a validated translation to the message list (no guard re-check).
+  void _addMessageDirect(String translatedText) {
+    final speaker = _pendingSpeaker ?? Speaker.user1;
+    final from = _pendingFrom ?? (state.languageConfig?.lang1Name ?? 'Language 1');
+    final to = _pendingTo ?? (state.languageConfig?.lang2Name ?? 'Language 2');
+    final original = _pendingTranscript ?? '';
+
+    final msg = TranslationMessage(
+      id: _uuid.v4(),
+      speaker: speaker,
+      originalText: original,
+      translatedText: translatedText,
+      fromLanguage: from,
+      toLanguage: to,
+      timestamp: DateTime.now(),
+    );
+
+    final wav = _player.pendingWav;
+    if (wav != null) {
+      _audioCache[msg.id] = wav;
+      _player.clearPendingWav();
+      if (_audioCache.length > 50) {
+        _audioCache.remove(_audioCache.keys.first);
+      }
+    }
+
+    state = state.copyWith(
+      messages: [...state.messages, msg],
+      activeSpeaker: speaker,
+    );
   }
 
   /// Re-issue the current utterance with [GrokApiService.requestTranslation] strict mode.
@@ -665,6 +776,9 @@ class ConversationController extends StateNotifier<ConversationState> {
     final fromLang = _pendingFrom ?? (state.languageConfig?.lang1Name ?? 'Language 1');
     final toLang = _pendingTo ?? (state.languageConfig?.lang2Name ?? 'Language 2');
     final textOnly = state.appMode == AppMode.subtitles;
+    _responseMessageAdded = false;
+    _pendingTranslatedText = null;
+    _translatorMessageCommitted = false;
     _translationInFlight = true;
     _log.i('[STRICT RETRY ${textOnly ? "subtitle" : "voice"} '
         '$fromLang → $toLang] "$transcript"');
@@ -786,7 +900,11 @@ class ConversationController extends StateNotifier<ConversationState> {
         if (state.activeSpeaker == Speaker.user2) {
           fromLang = d2; toLang = myLang; speaker = Speaker.user2;
         } else {
-          fromLang = d1; toLang = d2; speaker = Speaker.user1;
+          fromLang = d1;
+          toLang = TranslationGuard.languageNamesMatch(d1, myLang)
+              ? (state.detectedLang2 ?? _partnerLanguageName(myLang))
+              : myLang;
+          speaker = Speaker.user1;
         }
         // Sync _translateForward to match reality so barge-in / reconnect
         // keep the right direction.
@@ -813,10 +931,11 @@ class ConversationController extends StateNotifier<ConversationState> {
       }
     }
 
-    _pendingFrom = fromLang;
-    _pendingTo = toLang;
     _pendingSpeaker = speaker;
     _pendingTranscript = transcript;
+    _finalizePendingLanguages(transcript, fromLang, toLang, myLang);
+    _pendingTranslatedText = null;
+    _translatorMessageCommitted = false;
     _responseMessageAdded = false;
     _strictRetryUsed = false;
     _translationInFlight = true;
@@ -852,7 +971,47 @@ class ConversationController extends StateNotifier<ConversationState> {
     if (cleaned.startsWith('"') && cleaned.endsWith('"') && cleaned.length >= 2) {
       cleaned = cleaned.substring(1, cleaned.length - 1).trim();
     }
-    return cleaned;
+    return TranslationTextCleanup.deduplicateRepeatedPhrase(cleaned);
+  }
+
+  /// Resolve pill / bubble language labels from transcript + session state.
+  void _finalizePendingLanguages(
+    String transcript,
+    String fromLang,
+    String toLang,
+    String myLang,
+  ) {
+    final inferredCode = TranscriptLanguageHint.inferIsoCode(transcript);
+    if (inferredCode != null) {
+      _pendingFrom = _languageNameFromIso(inferredCode);
+      _pendingTo = myLang;
+      return;
+    }
+
+    var from = fromLang == 'auto' ? (state.detectedLang1 ?? myLang) : fromLang;
+    var to = toLang;
+
+    if (TranslationGuard.languageNamesMatch(from, to)) {
+      if (!TranslationGuard.languageNamesMatch(from, myLang)) {
+        to = myLang;
+      } else {
+        from = _partnerLanguageName(myLang);
+        to = myLang;
+      }
+    }
+
+    _pendingFrom = from;
+    _pendingTo = to;
+  }
+
+  String _languageNameFromIso(String isoCode) {
+    final code = isoCode.toLowerCase().split('-').first;
+    return kSupportedLanguages
+        .firstWhere(
+          (l) => l.code == code,
+          orElse: () => SupportedLanguage(code, _capitalize(code), '🌐'),
+        )
+        .name;
   }
 
   /// Map ISO-639-1 code → display name + flag using the supported languages list.
