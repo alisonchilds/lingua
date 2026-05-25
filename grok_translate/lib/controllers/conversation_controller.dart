@@ -11,6 +11,7 @@ import '../services/audio_player_service.dart';
 import '../services/grok_api_service.dart';
 import '../services/grok_audio_service.dart';
 import '../services/preferences_service.dart';
+import '../utils/translation_guard.dart';
 
 // ---------------------------------------------------------------------------
 // Providers
@@ -128,6 +129,9 @@ class ConversationController extends StateNotifier<ConversationState> {
   // translation cycle so the same phrase can be translated again next utterance.
   String? _lastTranslatedText;
 
+  /// Whether the current utterance already used a strict-prompt retry.
+  bool _strictRetryUsed = false;
+
   // Replay cache: maps message ID → WAV bytes so the user can re-hear any
   // past translation. Capped at 50 entries to keep memory bounded.
   final _audioCache = <String, Uint8List>{};
@@ -225,6 +229,7 @@ class ConversationController extends StateNotifier<ConversationState> {
     _postPlaybackTimer?.cancel();
     _transcriptAccumulator.clear();
     _lastTranslatedText = null;
+    _strictRetryUsed = false;
     _audioCache.clear();
     _previousOriginalText = null;
     // Always reset speaker alternation so the next session opens with User1.
@@ -464,8 +469,7 @@ class ConversationController extends StateNotifier<ConversationState> {
       case GrokServerEventType.responseAudioTranscriptDone:
         final text = event.transcriptText ?? _transcriptBuffer.toString();
         if (text.isNotEmpty && !_responseMessageAdded) {
-          _responseMessageAdded = true;
-          _addMessage(text);
+          if (_addMessage(text)) _responseMessageAdded = true;
         }
         state = state.copyWith(partialTranscript: '');
         _transcriptBuffer.clear();
@@ -493,8 +497,7 @@ class ConversationController extends StateNotifier<ConversationState> {
         final textDone =
             event.transcriptText ?? _transcriptBuffer.toString();
         if (textDone.isNotEmpty && !_responseMessageAdded) {
-          _responseMessageAdded = true;
-          _addMessage(textDone);
+          if (_addMessage(textDone)) _responseMessageAdded = true;
         }
         state = state.copyWith(partialTranscript: '');
         _transcriptBuffer.clear();
@@ -502,8 +505,9 @@ class ConversationController extends StateNotifier<ConversationState> {
 
       case GrokServerEventType.responseDone:
         if (!_responseMessageAdded && _transcriptBuffer.isNotEmpty) {
-          _responseMessageAdded = true;
-          _addMessage(_transcriptBuffer.toString());
+          if (_addMessage(_transcriptBuffer.toString())) {
+            _responseMessageAdded = true;
+          }
           _transcriptBuffer.clear();
           state = state.copyWith(partialTranscript: '');
         }
@@ -550,7 +554,11 @@ class ConversationController extends StateNotifier<ConversationState> {
     }
   }
 
-  void _addMessage(String translatedText) {
+  /// Commits a translation to the message list after sanitization.
+  ///
+  /// Returns false when a strict retry was triggered (caller must not mark the
+  /// response as committed yet).
+  bool _addMessage(String translatedText) {
     final speaker = _pendingSpeaker ?? Speaker.user1;
     final from = _pendingFrom ?? (state.languageConfig?.lang1Name ?? 'Language 1');
     final to = _pendingTo ?? (state.languageConfig?.lang2Name ?? 'Language 2');
@@ -572,6 +580,34 @@ class ConversationController extends StateNotifier<ConversationState> {
     }
 
     final sanitized = _sanitizeTranslation(textForSanitization);
+
+    if (!_strictRetryUsed &&
+        TranslationGuard.shouldRetryStrict(
+          output: sanitized,
+          originalInput: original,
+          targetLanguage: to,
+        )) {
+      _strictRetryUsed = true;
+      _log.w(
+        'Assistant-like translation detected; strict retry ($from → $to): '
+        '"$sanitized"',
+      );
+      _abortBadTranslationResponse();
+      _retryTranslationStrict();
+      return false;
+    }
+
+    if (_strictRetryUsed &&
+        TranslationGuard.shouldRetryStrict(
+          output: sanitized,
+          originalInput: original,
+          targetLanguage: to,
+        )) {
+      _log.w(
+        'Strict retry still produced assistant-like output; showing anyway: '
+        '"$sanitized"',
+      );
+    }
 
     final msg = TranslationMessage(
       id: _uuid.v4(),
@@ -599,6 +635,52 @@ class ConversationController extends StateNotifier<ConversationState> {
     state = state.copyWith(
       messages: [...state.messages, msg],
       activeSpeaker: speaker,
+    );
+    return true;
+  }
+
+  /// Discard a bad model response (assistant drift) before a strict retry.
+  void _abortBadTranslationResponse() {
+    _responseMessageAdded = false;
+    _transcriptBuffer.clear();
+    _player.clearPendingWav();
+    unawaited(_player.stop());
+    _api.cancelResponse();
+    state = state.copyWith(partialTranscript: '');
+    if (state.appMode == AppMode.translator) {
+      _setStatus(ConversationStatus.translating);
+    }
+  }
+
+  /// Re-issue the current utterance with [GrokApiService.requestTranslation] strict mode.
+  void _retryTranslationStrict() {
+    final transcript = _pendingTranscript?.trim();
+    if (transcript == null || transcript.isEmpty) {
+      _translationInFlight = false;
+      _resetToListening();
+      return;
+    }
+
+    final fromLang = _pendingFrom ?? (state.languageConfig?.lang1Name ?? 'Language 1');
+    final toLang = _pendingTo ?? (state.languageConfig?.lang2Name ?? 'Language 2');
+    final textOnly = state.appMode == AppMode.subtitles;
+    final myLangStr = _prefs.getMyLanguageName();
+    final isPreDetectionReverse =
+        state.detectedLang1 == null && fromLang == myLangStr;
+
+    _translationInFlight = true;
+    _log.i('[STRICT RETRY ${textOnly ? "subtitle" : "voice"} '
+        '$fromLang → $toLang] "$transcript"');
+
+    _api.requestTranslation(
+      transcript: transcript,
+      fromLanguage: fromLang,
+      toLanguage: toLang,
+      textOnly: textOnly,
+      myLanguage: fromLang == 'auto' ? myLangStr : null,
+      previousOriginalText:
+          isPreDetectionReverse ? _previousOriginalText : null,
+      strict: true,
     );
   }
 
@@ -721,6 +803,7 @@ class ConversationController extends StateNotifier<ConversationState> {
     _pendingSpeaker = speaker;
     _pendingTranscript = transcript;
     _responseMessageAdded = false;
+    _strictRetryUsed = false;
     _translationInFlight = true;
 
     final textOnly = state.appMode == AppMode.subtitles;

@@ -23,8 +23,6 @@ void main() {
         isTrue,
       );
     });
-  });
-}
 
     test('detects multilingual garbage', () {
       expect(
@@ -35,3 +33,32 @@ void main() {
         isTrue,
       );
     });
+
+    test('shouldRetryStrict combines assistant and multilingual checks', () {
+      expect(
+        TranslationGuard.shouldRetryStrict(
+          output: 'Hello! How can I help you today?',
+          originalInput: 'Hello',
+          targetLanguage: 'French',
+        ),
+        isTrue,
+      );
+      expect(
+        TranslationGuard.shouldRetryStrict(
+          output: 'Bonjour',
+          originalInput: 'Hello',
+          targetLanguage: 'French',
+        ),
+        isFalse,
+      );
+      expect(
+        TranslationGuard.shouldRetryStrict(
+          output: '',
+          originalInput: 'Hello',
+          targetLanguage: 'French',
+        ),
+        isFalse,
+      );
+    });
+  });
+}

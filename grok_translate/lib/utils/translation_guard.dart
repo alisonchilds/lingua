@@ -25,6 +25,17 @@ class TranslationGuard {
     ),
   ];
 
+  /// True when [output] should trigger one automatic strict-prompt retry.
+  static bool shouldRetryStrict({
+    required String output,
+    required String originalInput,
+    required String targetLanguage,
+  }) {
+    if (output.trim().isEmpty) return false;
+    return looksLikeAssistantReply(output, originalInput) ||
+        looksLikeMultilingualGarbage(output, targetLanguage);
+  }
+
   /// True when [output] looks like a chatbot reply rather than a translation.
   static bool looksLikeAssistantReply(String output, String originalInput) {
     final out = output.trim();
