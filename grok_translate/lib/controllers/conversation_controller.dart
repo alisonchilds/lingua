@@ -11,6 +11,7 @@ import '../services/audio_player_service.dart';
 import '../services/grok_api_service.dart';
 import '../services/grok_audio_service.dart';
 import '../services/preferences_service.dart';
+import '../utils/transcript_language_hint.dart';
 import '../utils/translation_guard.dart';
 
 // ---------------------------------------------------------------------------
@@ -664,22 +665,17 @@ class ConversationController extends StateNotifier<ConversationState> {
     final fromLang = _pendingFrom ?? (state.languageConfig?.lang1Name ?? 'Language 1');
     final toLang = _pendingTo ?? (state.languageConfig?.lang2Name ?? 'Language 2');
     final textOnly = state.appMode == AppMode.subtitles;
-    final myLangStr = _prefs.getMyLanguageName();
-    final isPreDetectionReverse =
-        state.detectedLang1 == null && fromLang == myLangStr;
-
     _translationInFlight = true;
     _log.i('[STRICT RETRY ${textOnly ? "subtitle" : "voice"} '
         '$fromLang → $toLang] "$transcript"');
 
+    final myLang = _prefs.getMyLanguageName();
     _api.requestTranslation(
       transcript: transcript,
       fromLanguage: fromLang,
       toLanguage: toLang,
       textOnly: textOnly,
-      myLanguage: fromLang == 'auto' ? myLangStr : null,
-      previousOriginalText:
-          isPreDetectionReverse ? _previousOriginalText : null,
+      myLanguage: fromLang == 'auto' ? myLang : null,
       strict: true,
     );
   }
@@ -722,6 +718,8 @@ class ConversationController extends StateNotifier<ConversationState> {
   ///   Translator: audio + text response, bidirectional speaker alternation.
   ///   Subtitles:  text-only response, always FROM detected lang TO target.
   void _triggerTranslation(String transcript) {
+    _applyTranscriptLanguageHint(transcript);
+
     // Backstop: if the accumulator dedup lets the same text through twice
     // (e.g. a race between the speechStopped shortcut and the 1200 ms timer),
     // silently drop the second call rather than firing a duplicate request.
@@ -732,6 +730,8 @@ class ConversationController extends StateNotifier<ConversationState> {
     _lastTranslatedText = transcript;
 
     final cfg = state.languageConfig ?? const LanguageConfig();
+    final textOnly = state.appMode == AppMode.subtitles;
+    final myLang = _prefs.getMyLanguageName();
 
     final String fromLang;
     final String toLang;
@@ -756,14 +756,18 @@ class ConversationController extends StateNotifier<ConversationState> {
         return;
       }
     } else if (cfg.autoDetect) {
-      final myLang = _prefs.getMyLanguageName();
-
       if (state.detectedLang1 == null) {
         // ── Pre-detection: neither speaker's language is confirmed yet ───────
         final isForwardTurn = _translateForward;
-        fromLang = isForwardTurn ? 'auto' : myLang;
-        toLang = myLang;
-        speaker = isForwardTurn ? Speaker.user1 : Speaker.user2;
+        if (isForwardTurn) {
+          fromLang = 'auto';
+          toLang = myLang;
+          speaker = Speaker.user1;
+        } else {
+          fromLang = myLang;
+          toLang = _partnerLanguageName(myLang);
+          speaker = Speaker.user2;
+        }
         _translateForward = !_translateForward;
 
         // Previously skipped the first forward-biDir turn to avoid assistant
@@ -798,6 +802,17 @@ class ConversationController extends StateNotifier<ConversationState> {
       _translateForward = !_translateForward;
     }
 
+    // Never call the model with identical from/to in translator mode.
+    if (!textOnly &&
+        cfg.autoDetect &&
+        (fromLang == 'auto' ||
+            TranslationGuard.languageNamesMatch(fromLang, toLang))) {
+      toLang = _partnerLanguageName(myLang);
+      if (fromLang == 'auto') {
+        fromLang = state.detectedLang1 ?? myLang;
+      }
+    }
+
     _pendingFrom = fromLang;
     _pendingTo = toLang;
     _pendingSpeaker = speaker;
@@ -806,23 +821,14 @@ class ConversationController extends StateNotifier<ConversationState> {
     _strictRetryUsed = false;
     _translationInFlight = true;
 
-    final textOnly = state.appMode == AppMode.subtitles;
     _log.i('[${textOnly ? "subtitle" : "voice"} $fromLang → $toLang] "$transcript"');
-
-    // In pre-detection reverse direction (fromLang==myLang), pass the previous
-    // original text so the model knows what language to translate INTO.
-    final myLangStr = _prefs.getMyLanguageName();
-    final isPreDetectionReverse =
-        state.detectedLang1 == null && fromLang == myLangStr;
 
     _api.requestTranslation(
       transcript: transcript,
       fromLanguage: fromLang,
       toLanguage: toLang,
       textOnly: textOnly,
-      myLanguage: fromLang == 'auto' ? myLangStr : null,
-      previousOriginalText:
-          isPreDetectionReverse ? _previousOriginalText : null,
+      myLanguage: fromLang == 'auto' ? myLang : null,
     );
 
     // Save for the next call's context (used by the reverse-direction biDir)
@@ -882,6 +888,34 @@ class ConversationController extends StateNotifier<ConversationState> {
 
   String _capitalize(String s) =>
       s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
+  /// Override Whisper language metadata using obvious words in the transcript.
+  void _applyTranscriptLanguageHint(String transcript) {
+    final code = TranscriptLanguageHint.inferIsoCode(transcript);
+    if (code != null) {
+      _log.i('Transcript language hint: $code for "$transcript"');
+      _updateDetectedLanguage(code);
+    }
+  }
+
+  /// Best-effort partner language when auto-detect has only heard one side so far.
+  String _partnerLanguageName(String myLang) {
+    final d2 = state.detectedLang2;
+    if (d2 != null && !TranslationGuard.languageNamesMatch(d2, myLang)) {
+      return d2;
+    }
+    final d1 = state.detectedLang1;
+    if (d1 != null && !TranslationGuard.languageNamesMatch(d1, myLang)) {
+      return d1;
+    }
+    final cfg = state.languageConfig;
+    if (cfg != null &&
+        cfg.lang2Code != 'auto' &&
+        !TranslationGuard.languageNamesMatch(cfg.lang2Name, myLang)) {
+      return cfg.lang2Name;
+    }
+    return myLang.toLowerCase() == 'english' ? 'German' : 'English';
+  }
 
   /// Called when session.updated is received — starts the mic now that the
   /// server has applied create_response:false and the session instructions.

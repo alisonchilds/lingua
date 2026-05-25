@@ -322,8 +322,8 @@ class _LanguagePills extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final cfg = state.languageConfig ?? const LanguageConfig();
 
-    // Left: always show the configured language (from myLanguage / lang1), not "Auto"
-    final lang1 = 'English';
+    final myLang = ref.read(preferencesServiceProvider).getMyLanguageName();
+    final lang1 = cfg.lang1Name == 'Auto Detect' ? myLang : cfg.lang1Name;
     final lang2 = state.detectedLang2 ??
         (cfg.autoDetect ? 'Auto' : cfg.lang2Name);
 

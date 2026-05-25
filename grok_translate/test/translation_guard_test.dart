@@ -34,6 +34,17 @@ void main() {
       );
     });
 
+    test('detects greeting chat not present in input', () {
+      expect(
+        TranslationGuard.shouldRetryStrict(
+          output: 'Hello. How are you? How\'s it going?',
+          originalInput: 'What should',
+          targetLanguage: 'German',
+        ),
+        isTrue,
+      );
+    });
+
     test('shouldRetryStrict combines assistant and multilingual checks', () {
       expect(
         TranslationGuard.shouldRetryStrict(

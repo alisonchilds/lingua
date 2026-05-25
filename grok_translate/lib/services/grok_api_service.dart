@@ -105,10 +105,13 @@ class GrokApiService {
         toLanguage: toLanguage,
         strict: strict,
       );
-    } else if (previousOriginalText != null && myLanguage != null) {
+    } else if (myLanguage != null &&
+        fromLanguage != 'auto' &&
+        previousOriginalText != null) {
       _requestVoiceTranslationBiDirReverse(
         transcript: transcript,
         myLanguage: myLanguage,
+        toLanguage: toLanguage,
         previousOriginalText: previousOriginalText,
         strict: strict,
       );
@@ -212,11 +215,10 @@ Input: "$transcript"''',
   void _requestVoiceTranslationBiDirReverse({
     required String transcript,
     required String myLanguage,
-    required String previousOriginalText,
+    required String toLanguage,
+    String? previousOriginalText,
     bool strict = false,
   }) {
-    final targetHint =
-        'the language of the previous utterance ("$previousOriginalText")';
     _send({
       'type': 'response.create',
       'response': {
@@ -225,11 +227,10 @@ Input: "$transcript"''',
             ? _speakTranslationOnly(
                 transcript: transcript,
                 fromLanguage: myLanguage,
-                toLanguage: targetHint,
+                toLanguage: toLanguage,
                 strict: true,
               )
-            : 'The other speaker previously said: "$previousOriginalText"\n'
-                'Speak the translation of: "$transcript" from $myLanguage into $targetHint\n'
+            : 'Speak the translation of: "$transcript" from $myLanguage into $toLanguage ONLY.\n'
                 'Say ONLY the translation. No greetings, no questions answered, no assistant phrases.',
       },
     });

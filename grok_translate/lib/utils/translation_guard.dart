@@ -23,6 +23,12 @@ class TranslationGuard {
       r"hello[!,.]?\s+how can",
       caseSensitive: false,
     ),
+    RegExp(r"how are you", caseSensitive: false),
+    RegExp(r"how'?s it going", caseSensitive: false),
+    RegExp(r"what'?s up", caseSensitive: false),
+    RegExp(r"good (morning|afternoon|evening)", caseSensitive: false),
+    RegExp(r"nice to see you", caseSensitive: false),
+    RegExp(r"great to (meet|hear|see)", caseSensitive: false),
   ];
 
   /// True when [output] should trigger one automatic strict-prompt retry.
@@ -45,6 +51,8 @@ class TranslationGuard {
     for (final pattern in _assistantPhrases) {
       if (pattern.hasMatch(lower)) return true;
     }
+
+    if (_outputAddsGreetingChatNotInInput(lower, orig)) return true;
 
     // Short social input answered with a long conversational reply.
     final orig = originalInput.trim().toLowerCase();
@@ -71,6 +79,29 @@ class TranslationGuard {
       }
     }
 
+    return false;
+  }
+
+  /// Model replied with small-talk phrases that are not in the source utterance.
+  static bool _outputAddsGreetingChatNotInInput(String lowerOut, String lowerOrig) {
+    const chatPhrases = [
+      'how are you',
+      "how's it going",
+      'hows it going',
+      "what's up",
+      'whats up',
+      'how can i help',
+      'what can i do',
+    ];
+    for (final phrase in chatPhrases) {
+      if (lowerOut.contains(phrase) && !lowerOrig.contains(phrase)) {
+        return true;
+      }
+    }
+    // Multiple questions in the output but not in the input → likely a reply, not a translation.
+    final outQs = '?'.allMatches(lowerOut).length;
+    final origQs = '?'.allMatches(lowerOrig).length;
+    if (outQs >= 2 && outQs > origQs) return true;
     return false;
   }
 
