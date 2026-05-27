@@ -96,6 +96,7 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
       appBar: _BabelfishAppBar(
         state: state,
         onSettings: () => context.push(AppRouter.pathSettings),
+        onEnd: state.isSessionActive ? _endSession : null,
       ),
       body: IndexedStack(
         index: _currentTab,
@@ -109,7 +110,6 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
             onToggleTest: () => setState(() => _showTestInput = !_showTestInput),
             onSubmitTest: _submitTestInput,
             onStart: _startSession,
-            onEnd: _endSession,
             hasAudio: ref.read(conversationControllerProvider.notifier).hasAudio,
             onReplay: (id) => ref
                 .read(conversationControllerProvider.notifier)
@@ -120,7 +120,6 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
             state: state,
             scrollController: _scrollController,
             onStart: _startSession,
-            onEnd: _endSession,
           ),
           // ── Tab 2: History ────────────────────────────────────────────────
           const _PlaceholderTab(
@@ -145,9 +144,14 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
 // ── App bar ────────────────────────────────────────────────────────────────────
 
 class _BabelfishAppBar extends StatelessWidget implements PreferredSizeWidget {
-  const _BabelfishAppBar({required this.state, required this.onSettings});
+  const _BabelfishAppBar({
+    required this.state,
+    required this.onSettings,
+    this.onEnd,
+  });
   final ConversationState state;
   final VoidCallback onSettings;
+  final VoidCallback? onEnd;
 
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
@@ -187,6 +191,18 @@ class _BabelfishAppBar extends StatelessWidget implements PreferredSizeWidget {
       ),
       leadingWidth: 160,
       actions: [
+        if (onEnd != null)
+          TextButton(
+            onPressed: onEnd,
+            style: TextButton.styleFrom(
+              foregroundColor: AppTheme.redEnd,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+            ),
+            child: const Text(
+              'End',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+            ),
+          ),
         IconButton(
           icon: const Icon(Icons.settings_outlined, color: Colors.white),
           onPressed: onSettings,
@@ -208,7 +224,6 @@ class _TranslateTab extends StatelessWidget {
     required this.onToggleTest,
     required this.onSubmitTest,
     required this.onStart,
-    required this.onEnd,
     required this.hasAudio,
     required this.onReplay,
   });
@@ -220,7 +235,6 @@ class _TranslateTab extends StatelessWidget {
   final VoidCallback? onToggleTest;
   final VoidCallback onSubmitTest;
   final VoidCallback onStart;
-  final VoidCallback onEnd;
   final bool Function(String id) hasAudio;
   final void Function(String id) onReplay;
 
@@ -268,7 +282,6 @@ class _TranslateTab extends StatelessWidget {
         _StatusBar(
           status: state.status,
           isSessionActive: state.isSessionActive,
-          onEnd: onEnd,
           onToggleTest: kDebugMode ? onToggleTest : null,
           showTestInput: showTestInput,
         ),
@@ -507,14 +520,6 @@ class _ListenEmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isListening = status == ConversationStatus.listening;
-    final isStarting = isSessionActive && !isListening;
-
-    // Label below the circle
-    final label = !isSessionActive
-        ? 'Tap to listen'
-        : isListening
-            ? 'Listening…'
-            : 'Starting…';
 
     // The circle pulses only when actively listening
     Widget circle = Container(
@@ -559,18 +564,16 @@ class _ListenEmptyState extends StatelessWidget {
             onTap: isSessionActive ? null : onStart,
             child: circle,
           ),
-          const SizedBox(height: 22),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w700,
-              color: isSessionActive
-                  ? AppTheme.magenta
-                  : const Color(0xFF888888),
-            ),
-          ),
           if (!isSessionActive) ...[
+            const SizedBox(height: 22),
+            const Text(
+              'Tap to listen',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF888888),
+              ),
+            ),
             const SizedBox(height: 8),
             const Text(
               'Tap the circle to start',
@@ -637,23 +640,21 @@ class _StatusBar extends StatelessWidget {
   const _StatusBar({
     required this.status,
     required this.isSessionActive,
-    required this.onEnd,
     required this.onToggleTest,
     required this.showTestInput,
   });
 
   final ConversationStatus status;
   final bool isSessionActive;
-  final VoidCallback onEnd;
   final VoidCallback? onToggleTest;
   final bool showTestInput;
 
   String _statusLabel() => switch (status) {
-        ConversationStatus.listening => 'Listening...',
-        ConversationStatus.translating => 'Translating...',
-        ConversationStatus.speaking => 'Speaking...',
+        ConversationStatus.listening => 'Listening…',
+        ConversationStatus.translating => 'Translating…',
+        ConversationStatus.speaking => 'Speaking…',
         ConversationStatus.error => 'Error',
-        _ => 'Starting...',
+        _ => 'Starting…',
       };
 
   @override
@@ -662,10 +663,9 @@ class _StatusBar extends StatelessWidget {
 
     return Container(
       color: AppTheme.cream,
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
       child: Row(
         children: [
-          // Test input toggle (small keyboard icon)
           if (onToggleTest != null)
             GestureDetector(
               onTap: onToggleTest,
@@ -690,31 +690,12 @@ class _StatusBar extends StatelessWidget {
                       ? AppTheme.errorColor
                       : AppTheme.magenta,
                   fontWeight: FontWeight.w600,
-                  fontSize: 15,
+                  fontSize: 16,
                 ),
               ),
             ),
           ),
-          // End button
-          GestureDetector(
-            onTap: onEnd,
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
-              decoration: BoxDecoration(
-                color: AppTheme.redEnd,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Text(
-                'End',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ),
+          const SizedBox(width: 20),
         ],
       ),
     );
@@ -954,18 +935,15 @@ class _SubtitlesTab extends StatelessWidget {
     required this.state,
     required this.scrollController,
     required this.onStart,
-    required this.onEnd,
   });
 
   final ConversationState state;
   final ScrollController scrollController;
   final VoidCallback onStart;
-  final VoidCallback onEnd;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isListening = state.status == ConversationStatus.listening;
 
     return Column(
       children: [
@@ -1045,58 +1023,12 @@ class _SubtitlesTab extends StatelessWidget {
                 ),
         ),
 
-        // ── Slim bottom bar ───────────────────────────────────────────────────
-        if (state.isSessionActive)
-          Container(
-            color: AppTheme.cream,
-            padding: const EdgeInsets.fromLTRB(20, 10, 20, 12),
-            child: Row(
-              children: [
-                // Listening indicator dot
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: isListening
-                        ? AppTheme.magenta
-                        : const Color(0xFFCCCCCC),
-                    shape: BoxShape.circle,
-                  ),
-                )
-                    .animate(
-                        onPlay:
-                            isListening ? (c) => c.repeat(reverse: true) : null)
-                    .fade(begin: 0.3, end: 1.0, duration: 600.ms),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    isListening ? 'Listening for speech…' : 'Translating…',
-                    style: TextStyle(
-                      color: AppTheme.magenta,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                GestureDetector(
-                  onTap: onEnd,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 18, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: AppTheme.redEnd,
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: const Text('End',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 13)),
-                  ),
-                ),
-              ],
-            ),
-          ),
+        _StatusBar(
+          status: state.status,
+          isSessionActive: state.isSessionActive,
+          onToggleTest: null,
+          showTestInput: false,
+        ),
       ],
     );
   }
