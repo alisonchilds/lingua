@@ -192,16 +192,12 @@ class _BabelfishAppBar extends StatelessWidget implements PreferredSizeWidget {
       leadingWidth: 160,
       actions: [
         if (onEnd != null)
-          TextButton(
+          IconButton(
             onPressed: onEnd,
-            style: TextButton.styleFrom(
-              foregroundColor: AppTheme.redEnd,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-            ),
-            child: const Text(
-              'End',
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
-            ),
+            tooltip: 'End session',
+            icon: const Icon(Icons.stop_circle_rounded),
+            color: AppTheme.redEnd,
+            iconSize: 28,
           ),
         IconButton(
           icon: const Icon(Icons.settings_outlined, color: Colors.white),
