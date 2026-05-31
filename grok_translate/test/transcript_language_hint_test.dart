@@ -7,6 +7,8 @@ void main() {
       expect(TranscriptLanguageHint.inferIsoCode('Gutentag'), 'de');
       expect(TranscriptLanguageHint.inferIsoCode('Guten Tag Wie Gehts'), 'de');
       expect(TranscriptLanguageHint.inferIsoCode('Hello'), isNull);
+      expect(TranscriptLanguageHint.inferIsoCode('Bo Arts'), 'fr');
+      expect(TranscriptLanguageHint.inferIsoCode('beaux arts'), 'fr');
     });
   });
 }

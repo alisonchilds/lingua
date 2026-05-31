@@ -11,7 +11,8 @@ class TranscriptLanguageHint {
     )),
     _Hint('fr', RegExp(
       r'\b(bonjour|bonsoir|salut|merci|s il vous plaît|comment allez|'
-      r'ça va|comment ça va|au revoir|excusez)\b',
+      r'ça va|comment ça va|au revoir|excusez|beaux?\s*arts|'
+      r'bo\s*arts|bozarts?)\b',
       caseSensitive: false,
     )),
     _Hint('es', RegExp(

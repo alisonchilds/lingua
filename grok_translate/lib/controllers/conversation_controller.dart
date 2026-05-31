@@ -11,6 +11,7 @@ import '../services/audio_player_service.dart';
 import '../services/grok_api_service.dart';
 import '../services/grok_audio_service.dart';
 import '../services/preferences_service.dart';
+import '../utils/transcript_correction.dart';
 import '../utils/transcript_language_hint.dart';
 import '../utils/translation_guard.dart';
 import '../utils/translation_text_cleanup.dart';
@@ -1108,10 +1109,17 @@ class ConversationController extends StateNotifier<ConversationState> {
     _log.i('Mic started after session.updated confirmed.');
   }
 
-  /// Whisper echo + repeated phrases on mic transcripts (all modes).
+  /// Whisper echo + misheard French + repeated phrases (all modes).
   String _cleanInputTranscript(String text) {
+    final trimmed = text.trim();
+    final corrected = TranscriptCorrection.correct(
+      trimmed,
+      languageConfig: state.languageConfig,
+      detectedLang1: state.detectedLang1,
+      detectedLang2: state.detectedLang2,
+    );
     return TranslationTextCleanup.deduplicateRepeatedPhrase(
-      TranslationTextCleanup.deduplicateConsecutiveEcho(text.trim()),
+      TranslationTextCleanup.deduplicateConsecutiveEcho(corrected),
     );
   }
 

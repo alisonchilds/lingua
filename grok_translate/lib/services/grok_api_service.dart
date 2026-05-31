@@ -236,6 +236,23 @@ Input: "$transcript"''',
     });
   }
 
+  /// Whisper often writes French [beaux arts] as "Bo Arts" / "Bozarts".
+  static String _frenchHomophoneNote(String transcript, String toLanguage) {
+    final t = transcript.toLowerCase();
+    final looksMisheard = RegExp(
+      r'\b(beau|bo|bow|bose)\s*arts?\b|\bbozarts?\b|beaux\s*arts',
+      caseSensitive: false,
+    ).hasMatch(t);
+    if (!looksMisheard) return '';
+    if (toLanguage.toLowerCase().contains('english')) {
+      return 'If the input is French "beaux arts", speak "fine arts" in English.\n';
+    }
+    if (toLanguage.toLowerCase().contains('french')) {
+      return 'If the input means fine arts in English, speak "beaux arts" in French.\n';
+    }
+    return '';
+  }
+
   static String _speakTranslationOnly({
     required String transcript,
     required String fromLanguage,
@@ -248,8 +265,10 @@ Input: "$transcript"''',
           'Speak ONLY in $toLanguage. No other languages. No assistant phrases.\n'
           'Forbidden: answering the question, "How can I help", extra commentary.';
     }
+    final homophoneNote = _frenchHomophoneNote(transcript, toLanguage);
     return 'Translate from $fromLanguage to $toLanguage.\n'
         'Input ($fromLanguage): "$transcript"\n'
+        '$homophoneNote'
         'Speak ONLY the $toLanguage translation. No other words or languages.';
   }
 
