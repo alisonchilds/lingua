@@ -1,3 +1,4 @@
 flutter/
 *.tar.xz
 *.tar.gz
+node_modules/

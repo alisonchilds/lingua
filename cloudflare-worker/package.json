@@ -1,0 +1,13 @@
+{
+  "name": "grok-translate-proxy",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "audit": "npm audit",
+    "audit:fix": "npm audit fix"
+  },
+  "devDependencies": {
+    "wrangler": "^4.19.0"
+  }
+}
