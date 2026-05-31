@@ -139,6 +139,10 @@ class ConversationController extends StateNotifier<ConversationState> {
 
   bool _translatorMessageCommitted = false;
 
+  /// Only the first audio transcript.done per response is staged (xAI may send
+  /// both response.audio_transcript.done and response.output_audio_transcript.done).
+  bool _translatorTranscriptDoneHandled = false;
+
   // Replay cache: maps message ID → WAV bytes so the user can re-hear any
   // past translation. Capped at 50 entries to keep memory bounded.
   final _audioCache = <String, Uint8List>{};
@@ -376,9 +380,7 @@ class ConversationController extends StateNotifier<ConversationState> {
             () {
               var full = _transcriptAccumulator.toString().trim();
               _transcriptAccumulator.clear();
-              if (state.appMode == AppMode.subtitles) {
-                full = _deduplicateEcho(full);
-              }
+              full = _cleanInputTranscript(full);
               if (full.isNotEmpty) _triggerTranslation(full);
             },
           );
@@ -436,9 +438,7 @@ class ConversationController extends StateNotifier<ConversationState> {
           () {
             var full = _transcriptAccumulator.toString().trim();
             _transcriptAccumulator.clear();
-            if (state.appMode == AppMode.subtitles) {
-              full = _deduplicateEcho(full);
-            }
+            full = _cleanInputTranscript(full);
             if (full.isNotEmpty && !_translationInFlight) {
               _triggerTranslation(full);
             }
@@ -449,6 +449,7 @@ class ConversationController extends StateNotifier<ConversationState> {
       case GrokServerEventType.responseCreated:
         _setStatus(ConversationStatus.translating);
         _responseMessageAdded = false;
+        _translatorTranscriptDoneHandled = false;
         break;
 
       case GrokServerEventType.responseAudioDelta:
@@ -467,14 +468,25 @@ class ConversationController extends StateNotifier<ConversationState> {
 
       case GrokServerEventType.responseAudioTranscriptDelta:
         if (event.transcriptDelta != null) {
-          _transcriptBuffer.write(event.transcriptDelta);
-          state = state.copyWith(
-              partialTranscript: _transcriptBuffer.toString());
+          final merged = TranslationTextCleanup.appendTranscriptDelta(
+            _transcriptBuffer.toString(),
+            event.transcriptDelta!,
+          );
+          _transcriptBuffer
+            ..clear()
+            ..write(merged);
+          state = state.copyWith(partialTranscript: merged);
         }
         break;
 
       case GrokServerEventType.responseAudioTranscriptDone:
-        final text = event.transcriptText ?? _transcriptBuffer.toString();
+        if (_translatorTranscriptDoneHandled) break;
+        _translatorTranscriptDoneHandled = true;
+        final rawDone =
+            event.transcriptText ?? _transcriptBuffer.toString();
+        final text = TranslationTextCleanup.deduplicateRepeatedPhrase(
+          rawDone.trim(),
+        );
         if (text.isNotEmpty && !_responseMessageAdded) {
           if (state.appMode == AppMode.translator) {
             if (_stageTranslatorOutput(text)) {
@@ -666,6 +678,7 @@ class ConversationController extends StateNotifier<ConversationState> {
     // Mark handled so a trailing response.done cannot commit duplicate text.
     _responseMessageAdded = true;
     _pendingTranslatedText = null;
+    _translatorTranscriptDoneHandled = true;
     _transcriptBuffer.clear();
     _player.clearPendingWav();
     unawaited(_player.stop());
@@ -715,6 +728,8 @@ class ConversationController extends StateNotifier<ConversationState> {
         _pendingTranslatedText == null) {
       return;
     }
+    // Claim before any await so response.done cannot double-commit.
+    _translatorMessageCommitted = true;
     final text = _pendingTranslatedText!;
     if (!_player.hasBufferedAudio && _player.pendingWav == null) {
       // Text arrived but no audio — still show the translation.
@@ -728,7 +743,6 @@ class ConversationController extends StateNotifier<ConversationState> {
     );
     _addMessageDirect(text);
     _pendingTranslatedText = null;
-    _translatorMessageCommitted = true;
     state = state.copyWith(partialTranscript: '');
   }
 
@@ -737,7 +751,7 @@ class ConversationController extends StateNotifier<ConversationState> {
     final speaker = _pendingSpeaker ?? Speaker.user1;
     final from = _pendingFrom ?? (state.languageConfig?.lang1Name ?? 'Language 1');
     final to = _pendingTo ?? (state.languageConfig?.lang2Name ?? 'Language 2');
-    final original = _pendingTranscript ?? '';
+    final original = _cleanInputTranscript(_pendingTranscript ?? '');
 
     final msg = TranslationMessage(
       id: _uuid.v4(),
@@ -832,6 +846,8 @@ class ConversationController extends StateNotifier<ConversationState> {
   ///   Translator: audio + text response, bidirectional speaker alternation.
   ///   Subtitles:  text-only response, always FROM detected lang TO target.
   void _triggerTranslation(String transcript) {
+    transcript = _cleanInputTranscript(transcript);
+    if (transcript.isEmpty) return;
     _applyTranscriptLanguageHint(transcript);
 
     // Backstop: if the accumulator dedup lets the same text through twice
@@ -936,6 +952,7 @@ class ConversationController extends StateNotifier<ConversationState> {
     _finalizePendingLanguages(transcript, fromLang, toLang, myLang);
     _pendingTranslatedText = null;
     _translatorMessageCommitted = false;
+    _translatorTranscriptDoneHandled = false;
     _responseMessageAdded = false;
     _strictRetryUsed = false;
     _translationInFlight = true;
@@ -1091,36 +1108,11 @@ class ConversationController extends StateNotifier<ConversationState> {
     _log.i('Mic started after session.updated confirmed.');
   }
 
-  /// Remove consecutive sentence repetitions caused by microphone echo.
-  ///
-  /// When the device mic picks up room echo, Whisper transcribes the original
-  /// speech and its reflection as one segment: "anything, Jeff? anything, Jeff?"
-  /// This strips the duplicate so only one copy reaches the subtitle display.
-  ///
-  /// Heuristic: find the first sentence boundary ([.!?] followed by whitespace),
-  /// then check whether the remainder of the string matches the first sentence.
-  /// Applies only to subtitles mode where each VAD commit is one phrase.
-  String _deduplicateEcho(String text) {
-    final t = text.trim();
-    if (t.length < 6) return t;
-
-    final boundary = RegExp(r'[.!?]\s+');
-    final m = boundary.firstMatch(t);
-    if (m == null) return t;
-
-    final first = t.substring(0, m.end).trim();
-    final rest = t.substring(m.end).trim();
-
-    // Strip trailing punctuation for a looser comparison so
-    // "Yeah?" vs "Yeah" (or period vs question mark) still deduplicate.
-    String norm(String s) =>
-        s.toLowerCase().replaceAll(RegExp(r'[^\w\s]'), '').trim();
-
-    if (norm(rest) == norm(first) ||
-        norm(rest).startsWith(norm(first))) {
-      return first;
-    }
-    return t;
+  /// Whisper echo + repeated phrases on mic transcripts (all modes).
+  String _cleanInputTranscript(String text) {
+    return TranslationTextCleanup.deduplicateRepeatedPhrase(
+      TranslationTextCleanup.deduplicateConsecutiveEcho(text.trim()),
+    );
   }
 
   /// Reset back to listening after a Subtitles translation completes or an
